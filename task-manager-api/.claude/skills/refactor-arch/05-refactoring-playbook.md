@@ -154,7 +154,7 @@ Para cada domínio identificado no God File (ex: Produto, Usuário, Pedido):
 # models.py — 314 linhas: produto, usuário, pedido, relatório tudo junto
 def get_todos_produtos(): ...
 def criar_produto(): ...
-def login_usuario(): ...       # autenticação aqui?
+def login_usuario(): ...       # Autenticacao aqui?
 def criar_pedido(): ...        # lógica de negócio aqui?
 def relatorio_vendas(): ...    # cálculo de desconto aqui?
 ```
@@ -439,7 +439,7 @@ task = db.session.get(Task, task_id)
 category = db.session.get(Category, cat_id)
 ```
 
-> **Nota:** `db.session.get()` retorna `None` se não encontrado, exatamente igual ao comportamento anterior de `query.get()`. Nenhuma mudança de lógica necessária.
+> **Nota:** `db.session.get()` retorna `None` se não encontrado, exatamente igual ao comportamento anterior de `query.get()`. Nenhuma mudança de lógica necessaria.
 
 ---
 

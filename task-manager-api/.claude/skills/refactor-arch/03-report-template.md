@@ -101,12 +101,12 @@ Use `---` (três hífens) entre cada finding para facilitar a leitura.
 ### [CRITICAL] SQL Injection
 File: models.py:109-111
 Anti-pattern: AP-01 — SQL Injection
-Description: A função `login_usuario` constrói a query de autenticação por
+Description: A função `login_usuario` constrói a query de Autenticacao por
 concatenação direta de strings, sem parâmetros. Qualquer valor nos campos
 email ou senha pode alterar a lógica da query:
   cursor.execute("SELECT * FROM usuarios WHERE email = '" + email + "' AND senha = '" + senha + "'")
   Um atacante pode usar email = "' OR '1'='1" para autenticar sem credenciais.
-Impact: Autenticação bypassável por qualquer usuário anônimo; possível exfiltração
+Impact: Autenticacao bypassável por qualquer usuário anônimo; possível exfiltração
 completa da tabela de usuários.
 Recommendation: Substituir por query parametrizada:
   cursor.execute("SELECT * FROM usuarios WHERE email = ? AND senha = ?", (email, senha))

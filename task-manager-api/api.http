@@ -1,0 +1,192 @@
+### Task Manager API — VS Code REST Client (extensão humao.rest-client)
+### Antes: python seed.py && python app.py
+### Usuários do seed: joao@email.com/1234 (admin), maria@email.com/abcd (user), pedro@email.com/pass (manager)
+
+@baseUrl = http://localhost:5000
+@contentType = application/json
+
+### ---------- Públicas ----------
+
+GET {{baseUrl}}/
+
+###
+GET {{baseUrl}}/health
+
+### ---------- Login (rode primeiro; o token é reaproveitado abaixo) ----------
+
+# @name login
+POST {{baseUrl}}/login
+Content-Type: {{contentType}}
+
+{
+  "email": "joao@email.com",
+  "password": "1234"
+}
+
+###
+@token = {{login.response.body.token}}
+
+### Sem token (401)
+GET {{baseUrl}}/tasks
+
+### ---------- Tasks ----------
+
+GET {{baseUrl}}/tasks
+Authorization: Bearer {{token}}
+
+###
+GET {{baseUrl}}/tasks/1
+Authorization: Bearer {{token}}
+
+###
+GET {{baseUrl}}/tasks/search?q=bug&status=pending&priority=1&user_id=1
+Authorization: Bearer {{token}}
+
+###
+GET {{baseUrl}}/tasks/stats
+Authorization: Bearer {{token}}
+
+###
+# @name createTask
+POST {{baseUrl}}/tasks
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "title": "Nova task via api.http",
+  "description": "Criada pelo REST Client",
+  "status": "pending",
+  "priority": 2,
+  "user_id": 1,
+  "category_id": 1,
+  "due_date": "2030-12-31",
+  "tags": ["teste", "http"]
+}
+
+###
+@taskId = {{createTask.response.body.id}}
+
+###
+PUT {{baseUrl}}/tasks/{{taskId}}
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "status": "in_progress",
+  "priority": 1
+}
+
+###
+DELETE {{baseUrl}}/tasks/{{taskId}}
+Authorization: Bearer {{token}}
+
+### Validação (400): título curto
+POST {{baseUrl}}/tasks
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{ "title": "x" }
+
+### ---------- Users ----------
+
+GET {{baseUrl}}/users
+Authorization: Bearer {{token}}
+
+###
+GET {{baseUrl}}/users/1
+Authorization: Bearer {{token}}
+
+###
+GET {{baseUrl}}/users/1/tasks
+Authorization: Bearer {{token}}
+
+### Cadastro público (role user)
+# @name createUser
+POST {{baseUrl}}/users
+Content-Type: {{contentType}}
+
+{
+  "name": "Ana Teste",
+  "email": "ana.teste@email.com",
+  "password": "1234"
+}
+
+###
+@userId = {{createUser.response.body.id}}
+
+### Criar admin (só com token de admin)
+POST {{baseUrl}}/users
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "name": "Admin Novo",
+  "email": "admin.novo@email.com",
+  "password": "1234",
+  "role": "admin"
+}
+
+###
+PUT {{baseUrl}}/users/{{userId}}
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "name": "Ana Atualizada",
+  "role": "manager"
+}
+
+###
+DELETE {{baseUrl}}/users/{{userId}}
+Authorization: Bearer {{token}}
+
+### ---------- Categories ----------
+
+GET {{baseUrl}}/categories
+Authorization: Bearer {{token}}
+
+###
+# @name createCategory
+POST {{baseUrl}}/categories
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "name": "QA",
+  "description": "Tarefas de qualidade",
+  "color": "#9b59b6"
+}
+
+###
+@categoryId = {{createCategory.response.body.id}}
+
+###
+PUT {{baseUrl}}/categories/{{categoryId}}
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{ "color": "#1abc9c" }
+
+###
+DELETE {{baseUrl}}/categories/{{categoryId}}
+Authorization: Bearer {{token}}
+
+### ---------- Reports ----------
+
+GET {{baseUrl}}/reports/summary
+Authorization: Bearer {{token}}
+
+###
+GET {{baseUrl}}/reports/user/1
+Authorization: Bearer {{token}}
+
+### ---------- Casos de erro (esperado 401) — NÃO use para obter token ----------
+
+### Login com senha errada (401 esperado)
+POST {{baseUrl}}/login
+Content-Type: {{contentType}}
+
+{
+  "email": "joao@email.com",
+  "password": "errada"
+}

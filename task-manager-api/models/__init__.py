@@ -1,3 +1,3 @@
-from models.task import Task
-from models.user import User
-from models.category import Category
+from models.task_model import Task
+from models.user_model import User
+from models.category_model import Category

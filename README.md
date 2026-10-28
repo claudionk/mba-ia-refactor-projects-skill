@@ -987,6 +987,359 @@ Mudanças de comportamento a conhecer:
 **Por que esses problemas são relevantes:** Apesar de ter organização parcial, o projeto viola MVC ao colocar lógica de negócio nas routes. A API deprecated quebrará em futuras atualizações do SQLAlchemy. O `SECRET_KEY` hardcoded é um risco crítico de segurança mesmo em projetos "parcialmente organizados".
 
 ---
+#### Resulstado da execução da Skill
+
+================================
+ARCHITECTURE AUDIT REPORT
+================================
+Project: task-manager-api
+Stack:   Python + Flask
+Files:   15 analyzed | ~1158 lines of code
+Date:    2026-10-27
+
+## Summary
+
+CRITICAL: 2 | HIGH: 6 | MEDIUM: 3 | LOW: 5
+Total findings: 16
+
+## Findings
+
+### [CRITICAL] Hardcoded Credentials / Secrets
+File: app.py:9,12 | services/notification_service.py:7-10
+Anti-pattern: AP-02 — Hardcoded Credentials / Secrets
+Description: `app.config['SECRET_KEY'] = 'super-secret-key-123'` (app.py:12) e
+`self.email_password = 'senha123'` / `self.email_user = 'taskmanager@gmail.com'`
+(notification_service.py:9-10) estão literais no código versionado. A URI do banco
+(`sqlite:///tasks.db`, app.py:9) e o host SMTP também são hardcoded.
+Impact: Qualquer pessoa com acesso ao repositório pode forjar sessões e usar a conta
+SMTP; trocar de ambiente exige editar código.
+Recommendation: Criar `config/settings.py` lendo `SECRET_KEY`, `DATABASE_URI`,
+`SMTP_*` de variáveis de ambiente (python-dotenv já está no requirements) e falhar/avisar
+se ausentes; adicionar `.env.example`.
+
+---
+
+### [CRITICAL] Senha com Hash Inseguro / Exposta na API
+File: models/user.py:21,27-32
+Anti-pattern: AP-04 — Senha em Texto Puro / Hash Inseguro
+Description: `set_password` usa `hashlib.md5(pwd.encode()).hexdigest()` (sem salt) e
+`to_dict()` inclui `'password': self.password` (linha 21). `to_dict()` é retornado em
+GET /users/<id>, POST /users, PUT /users/<id> e POST /login.
+Impact: Hashes MD5 vazam em respostas da API e são quebráveis por rainbow table em
+segundos; todas as contas ficam comprometidas.
+Recommendation: Usar `werkzeug.security.generate_password_hash` /
+`check_password_hash` e remover `password` do `to_dict()`. Manter compatibilidade no
+login com hashes MD5 legados (rehash no primeiro login) ou re-executar o seed.
+
+---
+
+### [HIGH] Deprecated API — SQLAlchemy Model.query.get()
+File: routes/task_routes.py:42,51,67,117,122,158,188,195,227 | routes/user_routes.py:29,94,136,155 | routes/report_routes.py:105,192,213
+Anti-pattern: DEP-01 — SQLAlchemy Model.query.get() depreciado
+Description: 16 ocorrências de `Model.query.get(id)` (ex.: `User.query.get(t.user_id)`).
+Impact: Quebra ao atualizar para SQLAlchemy 2.1+; emite warnings hoje.
+Recommendation: Substituir por `db.session.get(Model, id)` dentro dos models/controllers.
+
+---
+
+### [HIGH] Lógica de Negócio em Route Handler
+File: routes/task_routes.py:11-299 | routes/user_routes.py:10-211 | routes/report_routes.py:12-223
+Anti-pattern: AP-06 — Lógica de Negócio em Route Handler
+Description: Não há camada controller. Handlers fazem validação, queries, cálculo de
+overdue/estatísticas e commit (ex.: `summary_report` com ~90 linhas e 10+ queries;
+`create_task` e `update_task` com ~70 linhas cada). O diretório `services/` contém
+apenas um `NotificationService` não utilizado.
+Impact: Impossível testar regras sem HTTP; qualquer mudança de regra toca rotas.
+Recommendation: Criar `controllers/` (task, user, category, report) com a lógica e
+deixar `routes/` apenas com parse de request → chamada ao controller → jsonify.
+
+---
+
+### [HIGH] Lógica de Negócio Duplicada (DRY)
+File: routes/task_routes.py:30-39,71-80,283-287 | routes/user_routes.py:171-180 | routes/report_routes.py:34-43,132-135 | routes/task_routes.py:16-28 vs routes/user_routes.py:162-169 |
+routes/task_routes.py:96-144 vs 166-213 vs utils/helpers.py:57-108
+Anti-pattern: AP-07 — Lógica de Negócio Duplicada (DRY Violation)
+Description: A regra de "overdue" é reimplementada 6 vezes com if aninhado, embora
+`Task.is_overdue()` (models/task.py:50-60) exista e nunca seja usada. A serialização
+de task é copiada em 2 rotas, a validação de task existe em create, update e em
+`process_task_data` (helpers, não usada), e o regex de email aparece em
+user_routes.py:61,106 e helpers.py:21.
+Impact: Correções de regra precisam ser feitas em N lugares; risco de divergência.
+Recommendation: Usar `Task.is_overdue()` e `Task.to_dict()` (incluindo `overdue`) em
+todos os pontos; centralizar validação em um módulo único usado por create/update.
+
+---
+
+### [HIGH] Debug Mode em Produção
+File: app.py:33
+Anti-pattern: AP-08 — Debug Mode em Produção
+Description: `app.run(debug=True, host='0.0.0.0', port=5000)` fixo no código.
+Impact: Debugger interativo Werkzeug exposto na rede permite execução remota de código.
+Recommendation: Ler `DEBUG`, `HOST`, `PORT` da config/ambiente com default `False`
+e host `127.0.0.1`.
+
+---
+
+### [HIGH] Autenticação Falsa / Sem Autorização
+File: routes/user_routes.py:207-211, 71-78
+Anti-pattern: AP-08 — Informações sensíveis / segurança no response (mais próximo no catálogo)
+Description: `/login` retorna `'token': 'fake-jwt-token-' + str(user.id)`, token
+previsível que nenhum endpoint valida. Todos os endpoints são públicos e `POST /users`
+aceita `role: 'admin'` de qualquer cliente.
+Impact: Qualquer um pode criar admin, listar/editar/deletar usuários e tasks.
+Recommendation: No escopo desta refatoração, manter o contrato do token, mas isolar a
+geração em um módulo de auth e documentar a limitação; autenticação real (JWT) fica
+como próximo passo, pois altera o comportamento da API.
+
+---
+
+### [HIGH] God File — Responsabilidades Misturadas
+File: routes/report_routes.py:157-223
+Anti-pattern: AP-05 — God Class / God File
+Description: `report_routes.py` contém relatórios (`/reports/*`) e todo o CRUD de
+categorias (`/categories`), além de importar helpers não usados.
+Impact: Dificulta localizar e evoluir cada domínio.
+Recommendation: Mover o CRUD de categorias para `category_routes.py` +
+`category_controller.py`, preservando as URLs.
+
+---
+
+### [MEDIUM] N+1 Query Problem
+File: routes/task_routes.py:41-57 | routes/user_routes.py:22 | routes/report_routes.py:55-61,163
+Anti-pattern: AP-09 — N+1 Query Problem
+Description: `GET /tasks` faz `User.query.get` e `Category.query.get` por task;
+`GET /users` acessa `len(u.tasks)` (lazy load por usuário); `summary_report` faz
+`Task.query.filter_by(user_id=u.id).all()` por usuário; `GET /categories` faz um
+`count()` por categoria.
+Impact: Número de queries cresce linearmente com os dados.
+Recommendation: Usar `joinedload`/`selectinload` e `group_by` com `func.count`.
+
+---
+
+### [MEDIUM] Ausência de Validação de Entrada
+File: routes/task_routes.py:113,182,261,264 | routes/user_routes.py:103,125 | routes/report_routes.py:196-202,173-180
+Anti-pattern: AP-11 — Ausência de Validação de Entrada
+Description: `priority < 1` com valor não numérico gera TypeError; `int(priority)` /
+`int(user_id)` em /tasks/search sem tratamento gera 500 (ValueError); `PUT /categories`
+usa `'name' in data` sem checar `data is None`; `title` não é checado como string;
+`active` e `color` não são validados; `name` de usuário aceita vazio no update.
+Impact: Entradas malformadas causam 500 ou dados inválidos persistidos.
+Recommendation: Funções de validação nos controllers com tipos/limites e resposta 400.
+
+---
+
+### [MEDIUM] Bare Except / Swallowed Exceptions
+File: routes/task_routes.py:62,137,204,236 | routes/user_routes.py:130,149 | routes/report_routes.py:186,207,221 | routes/task_routes.py:221 | utils/helpers.py:47,49,88
+Anti-pattern: AP-12 — Bare Except / Swallowed Exceptions
+Description: `except:` sem tipo (inclui KeyboardInterrupt) e `except Exception as e`
+sem logar `e` (task_routes.py:221). `get_tasks` retorna 'Erro interno' sem registrar a causa.
+Impact: Falhas reais ficam invisíveis, dificultando diagnóstico.
+Recommendation: Capturar exceções específicas (`ValueError`, `SQLAlchemyError`),
+logar com `logging` e centralizar o tratamento em um error handler global.
+
+---
+
+### [LOW] Print para Logging
+File: routes/task_routes.py:149,153,219,234 | routes/user_routes.py:83,89,147 | services/notification_service.py:21,24 | utils/helpers.py:39-41
+Anti-pattern: AP-13 — Print / Console.log para Logging
+Description: Uso de `print()` em vez de `logging`.
+Impact: Sem níveis, formato ou destino configurável.
+Recommendation: Usar `logging.getLogger(__name__)`.
+
+---
+
+### [LOW] Magic Numbers / Magic Strings
+File: routes/task_routes.py:110,177 | models/task.py:39,52-53 | utils/helpers.py:75 | routes/user_routes.py:64,71,115,120 | routes/report_routes.py:129
+Anti-pattern: AP-14 — Magic Numbers / Magic Strings
+Description: Lista de status repetida 4 vezes, roles, limites de prioridade (1-5),
+tamanho de senha/título e `priority <= 2` hardcoded, apesar de `helpers.py:110-116`
+definir constantes que ninguém importa.
+Impact: Mudanças exigem edição em vários arquivos.
+Recommendation: Centralizar em `config/constants.py` (ou no model) e importar.
+
+---
+
+### [LOW] Nomes de Variáveis Sem Semântica
+File: routes/report_routes.py:24-28 | routes/task_routes.py:16,42,51 | routes/user_routes.py:14,37 | models/task.py:45 | models/user.py:27 | utils/helpers.py:25
+Anti-pattern: AP-15 — Nomes de Variáveis Sem Semântica
+Description: `p1..p5`, `t`, `u`, `c`, `cat`, `p`, `pwd`, `s`.
+Impact: Leitura mais difícil.
+Recommendation: Renomear (`task`, `user`, `category`, `priority`, `password`).
+
+---
+
+### [LOW] Imports Não Utilizados / Código Morto
+File: app.py:5 | routes/task_routes.py:7 | routes/user_routes.py:6 | routes/report_routes.py:7-8 | models/task.py:3 | utils/helpers.py:2-7,9-55 | services/notification_service.py:4-48
+Anti-pattern: AP-16 — Imports Não Utilizados
+Description: `os, sys, json, time`, `hashlib` (user_routes), `format_date`,
+`calculate_percentage`, `math` etc. não são usados. `NotificationService` e a maior parte
+de `helpers.py` não são referenciados em lugar nenhum.
+Impact: Ruído e dependências desnecessárias.
+Recommendation: Remover imports e código morto (ou integrá-lo, como `is_overdue`).
+
+---
+
+### [LOW] Deprecated API — datetime.utcnow()
+File: models/*.py (default de colunas) | routes/*.py | services/notification_service.py:35 | utils/helpers.py:38
+Anti-pattern: Não catalogado (relacionado a DEP)
+Description: `datetime.utcnow()` está depreciado desde o Python 3.12 (projeto roda em 3.14).
+Impact: DeprecationWarning; será removido no futuro.
+Recommendation: Isolar em um helper `utc_now()` único. Cuidado: as colunas guardam
+datetimes naive, então o helper deve retornar naive UTC para manter compatibilidade.
+
+
+### [LOW] Deprecated API — datetime.utcnow()
+File: models/*.py (default de colunas) | routes/*.py | services/notification_service.py:35 | utils/helpers.py:38
+Anti-pattern: Não catalogado (relacionado a DEP)
+Description: `datetime.utcnow()` está depreciado desde o Python 3.12 (projeto roda em 3.14).
+Impact: DeprecationWarning; será removido no futuro.
+Recommendation: Isolar em um helper `utc_now()` único. Cuidado: as colunas guardam
+datetimes naive, então o helper deve retornar naive UTC para manter compatibilidade.
+
+================================
+Total: 16 findings
+CRITICAL: 2 | HIGH: 6 | MEDIUM: 3 | LOW: 5
+================================
+
+---
+
+================================
+PHASE 1: PROJECT ANALYSIS
+================================
+Language:      Python (versão não especificada; __pycache__ indica 3.14)
+Framework:     Flask 3.0.0
+Dependencies:  flask-sqlalchemy 3.1.1, flask-cors 4.0.0, marshmallow 3.20.1 (não usado), requests 2.31.0 (não usado), python-dotenv 1.0.0 (não usado)
+Domain:        Task Manager API para criação, atribuição e acompanhamento de tarefas, usuários e categorias
+Architecture:  Parcialmente organizada. Existem models/, routes/, services/ e utils/, mas não há camada Controller. A lógica de negócio está nas routes.
+Source files:  15 files analyzed (~1158 LOC)
+DB:            SQLite (instance/tasks.db), ORM Flask-SQLAlchemy, sem migrations (db.create_all)
+================================
+
+Phase 2: audit
+
+Assumi que este é o projeto nº 3, então o relatório completo está em reports/audit-project-3.md. Me diga se o número for outro.
+
+Resumo: 16 findings. CRITICAL: 2 | HIGH: 6 | MEDIUM: 3 | LOW: 5.
+
+┌──────────┬────────────────────────────────────────────────────────────────────┬──────────────────────────────────────────────────────────────────┐
+│   Sev    │                              Finding                               │                              Local                               │
+├──────────┼────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┤
+│ CRITICAL │ AP-02 Secrets hardcoded (SECRET_KEY, senha SMTP senha123, URI do   │ app.py:9,12, services/notification_service.py:9-10               │
+│          │ banco)                                                             │                                                                  │
+├──────────┼────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┤
+│ CRITICAL │ AP-04 Senha com MD5 sem salt, e password retornado em to_dict()    │ models/user.py:21,27-32                                          │
+│          │ (login, GET/POST/PUT de usuários)                                  │                                                                  │
+├──────────┼────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┤
+│ HIGH     │ DEP-01 Model.query.get() (16 ocorrências)                          │ task_routes, user_routes, report_routes                          │
+├──────────┼────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┤
+│ HIGH     │ AP-06 Lógica de negócio nas routes, sem controllers                │ todas as routes                                                  │
+├──────────┼────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┤
+│ HIGH     │ AP-07 "Overdue" duplicado 6 vezes (Task.is_overdue() existe e não  │ task_routes.py:30-39,71-80,283-287, user_routes.py:171-180,      │
+│          │ é usado); serialização e validação duplicadas                      │ report_routes.py:34-43,132-135                                   │
+├──────────┼────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┤
+│ HIGH     │ AP-08 debug=True com host=0.0.0.0                                  │ app.py:33                                                        │
+├──────────┼────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┤
+│ HIGH     │ Token falso fake-jwt-token-<id>, sem autorização, e POST /users    │ user_routes.py:207-211,71-78                                     │
+│          │ aceita role: admin                                                 │                                                                  │
+├──────────┼────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┤
+│ HIGH     │ AP-05 CRUD de categorias dentro de report_routes.py                │ report_routes.py:157-223                                         │
+├──────────┼────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┤
+│ MEDIUM   │ AP-09 N+1 em /tasks, /users, /reports/summary, /categories         │ task_routes.py:41-57, report_routes.py:55-61,163                 │
+├──────────┼────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┤
+│ MEDIUM   │ AP-11 Validação ausente (int() sem try, data None, tipos)          │ task_routes.py:113,182,261,264, report_routes.py:196-202         │
+├──────────┼────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┤
+│ MEDIUM   │ AP-12 Bare except: e exceções sem log                              │ task_routes.py:62,137,204,236, user_routes.py:130,149,           │
+│          │                                                                    │ report_routes.py:186,207,221                                     │
+├──────────┼────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┤
+│ LOW      │ AP-13 print em vez de logging                                      │ várias                                                           │
+├──────────┼────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┤
+│ LOW      │ AP-14 Strings e números mágicos (status repetido 4×; constantes em │ várias                                                           │
+│          │  helpers.py não usadas)                                            │                                                                  │
+├──────────┼────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┤
+│ LOW      │ AP-15 Nomes ruins (p1..p5, t, u, c)                                │ várias                                                           │
+├──────────┼────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┤
+│ LOW      │ AP-16 Imports e código morto (NotificationService, a maior parte   │ várias                                                           │
+│          │ de helpers.py)                                                     │                                                                  │
+├──────────┼────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┤
+│ LOW      │ datetime.utcnow() depreciado (não está no catálogo)                │ models, routes                                                   │
+└──────────┴────────────────────────────────────────────────────────────────────┴──────────────────────────────────────────────────────────────────┘
+
+Três pontos a decidir antes da Fase 3:
+- Hash de senha: trocar MD5 por werkzeug invalida os hashes existentes. Vou manter compatibilidade com MD5 no login, com rehash no primeiro acesso, e remover password das respostas. Isso muda o contrato das respostas.
+- Autenticação: o token falso e a falta de autorização vão continuar. Implementar JWT mudaria o comportamento da API, e a skill exige preservar os contratos. Fica documentado como próximo passo.
+- seed.py: vou ajustá-lo para usar os novos models.
+
+================================
+PHASE 2 COMPLETE
+================================
+Relatório salvo em: reports/audit-project-3.md
+Total de findings: 16
+
+Phase 3 vai reestruturar o projeto para o padrão MVC.
+Todos os arquivos originais serão modificados ou movidos.
+
+Proceed with refactoring (Phase 3)? [y/n]
+---
+
+Phase 3: refactoring complete
+
+================================
+PHASE 3: REFACTORING COMPLETE
+================================
+## New Project Structure
+task-manager-api/
+├── app.py                      create_app(), blueprints, error handlers (~45 lines)
+├── database.py
+PHASE 3: REFACTORING COMPLETE
+================================
+## New Project Structure
+task-manager-api/
+├── app.py                      create_app(), blueprints, error handlers (~45 lines)
+├── database.py
+├── seed.py                     imports updated
+├── .env.example, .gitignore
+├── config/        settings.py (env vars), constants.py
+├── models/        base.py (CrudMixin), task_model.py, user_model.py, category_model.py
+├── controllers/   task_, user_, category_, report_controller.py
+├── routes/        task_, user_, category_, report_routes.py   (thin handlers)
+├── middlewares/   error_handler.py
+├── services/      notification_service.py   (now reads SMTP settings from env)
+└── utils/         errors.py, validators.py, time_utils.py
+
+## Issues Resolved
+  ✓ AP-02 Secrets: SECRET_KEY, SMTP credentials and DB URI now come from environment variables
+  ✓ AP-04 Password hashing: PBKDF2 replaces MD5, and `password` is no longer in any response
+  ✓ DEP-01 `Model.query.get` replaced by `db.session.get` (0 occurrences left)
+  ✓ AP-05/06 Controllers added; category CRUD moved out of report_routes; handlers are 2–8 lines
+  ✓ AP-07 One `Task.is_overdue()`, one serializer, one validator (create and update share it)
+  ✓ AP-08 `debug` is now off by default (`DEBUG` env var), host defaults to 127.0.0.1
+  ✓ AP-09 N+1 queries replaced by joinedload and group-by counts
+  ✓ AP-11 Validation added for types, search params, `active`, `color` and a null body
+  ✓ AP-12/13 No bare `except:`; `logging` replaces `print` (seed.py keeps its prints, since it's a utility script)
+  ✓ AP-14/15/16 Constants centralized, names cleaned up, dead code and unused imports removed
+  ✓ `datetime.utcnow()` wrapped in `utc_now()`
+
+## Validation
+  ✓ Application boots without errors (real server started on :5055, /health, /tasks/stats, /categories and /reports/summary answered)
+  ✓ 48-request smoke script run against the original and the refactored code: status codes and bodies are identical, apart from the intentional changes below
+  ✓ A legacy MD5 user can log in and the hash is upgraded on that login (a wrong password still returns 401)
+  ✓ No CRITICAL/HIGH finding is left, except the fake auth below
+================================
+
+Contract changes (intentional)
+- password is gone from /users, /login and the other user responses.
+- Bad inputs that used to return 500 now return 400: a non-numeric priority or user_id on /tasks/search, or a non-numeric priority on task create or update.
+- New validation can reject payloads that used to pass: invalid active, color or user name, and empty category names.
+
+Still open
+- Fake auth: /login still returns fake-jwt-token-<id> and no endpoint checks it. POST /users still accepts role: admin from anyone. Real JWT auth would change the API, so I left it as the next step.
+- README: I added a section on the new structure to README.md, including the password change and the fake token.
+- Unrelated change: git status also shows ../README.md as modified. I didn't touch it, so it may be your own edit.
+- Smoke tests: they ran in a scratch copy, so your instance/tasks.db was never modified. Run python seed.py before python app.py.
+- Dependencies: flask-sqlalchemy wasn't installed in your environment. I installed the dependencies into the scratchpad, not globally.
+- Commit: nothing is committed. Do you want me to commit this?
+
+---
 
 ## Construção da Skill
 

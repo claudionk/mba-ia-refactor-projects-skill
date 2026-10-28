@@ -110,7 +110,7 @@ Proceed with refactoring (Phase 3)? [y/n]
    - `models/` — entidades e acesso a dados
    - `controllers/` — lógica de negócio
    - `views/` ou `routes/` — roteamento HTTP
-   - `middlewares/` — error handling, autenticação, etc.
+   - `middlewares/` — error handling, Autenticacao, etc.
 
 2. **Aplicar os padrões de transformação** do playbook em `05-refactoring-playbook.md` para cada finding identificado na Fase 2.
 
