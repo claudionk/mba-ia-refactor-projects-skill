@@ -66,7 +66,7 @@ def process_task_data(data, existing_task=None):
             else:
                 return None, 'Título deve ter entre 3 e 200 caracteres'
         else:
-            return None, 'Título não pode ser vazio'
+            return None, 'Título nao pode ser vazio'
 
     if 'description' in data:
         result['description'] = data['description']

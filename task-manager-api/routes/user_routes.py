@@ -28,7 +28,7 @@ def get_users():
 def get_user(user_id):
     user = User.query.get(user_id)
     if not user:
-        return jsonify({'error': 'Usuário não encontrado'}), 404
+        return jsonify({'error': 'Usuário nao encontrado'}), 404
 
     data = user.to_dict()
 
@@ -93,7 +93,7 @@ def create_user():
 def update_user(user_id):
     user = User.query.get(user_id)
     if not user:
-        return jsonify({'error': 'Usuário não encontrado'}), 404
+        return jsonify({'error': 'Usuário nao encontrado'}), 404
 
     data = request.get_json()
     if not data:
@@ -135,7 +135,7 @@ def update_user(user_id):
 def delete_user(user_id):
     user = User.query.get(user_id)
     if not user:
-        return jsonify({'error': 'Usuário não encontrado'}), 404
+        return jsonify({'error': 'Usuário nao encontrado'}), 404
 
     tasks = Task.query.filter_by(user_id=user_id).all()
     for t in tasks:
@@ -154,7 +154,7 @@ def delete_user(user_id):
 def get_user_tasks(user_id):
     user = User.query.get(user_id)
     if not user:
-        return jsonify({'error': 'Usuário não encontrado'}), 404
+        return jsonify({'error': 'Usuário nao encontrado'}), 404
 
     tasks = Task.query.filter_by(user_id=user_id).all()
     result = []

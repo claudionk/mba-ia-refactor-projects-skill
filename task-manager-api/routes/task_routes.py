@@ -80,7 +80,7 @@ def get_task(task_id):
             data['overdue'] = False
         return jsonify(data), 200
     else:
-        return jsonify({'error': 'Task não encontrada'}), 404
+        return jsonify({'error': 'Task nao encontrada'}), 404
 
 @task_bp.route('/tasks', methods=['POST'])
 def create_task():
@@ -116,12 +116,12 @@ def create_task():
     if user_id:
         user = User.query.get(user_id)
         if not user:
-            return jsonify({'error': 'Usuário não encontrado'}), 404
+            return jsonify({'error': 'Usuário nao encontrado'}), 404
 
     if category_id:
         cat = Category.query.get(category_id)
         if not cat:
-            return jsonify({'error': 'Categoria não encontrada'}), 404
+            return jsonify({'error': 'Categoria nao encontrada'}), 404
 
     task = Task()
     task.title = title
@@ -157,7 +157,7 @@ def create_task():
 def update_task(task_id):
     task = Task.query.get(task_id)
     if not task:
-        return jsonify({'error': 'Task não encontrada'}), 404
+        return jsonify({'error': 'Task nao encontrada'}), 404
 
     data = request.get_json()
     if not data:
@@ -187,14 +187,14 @@ def update_task(task_id):
         if data['user_id']:
             user = User.query.get(data['user_id'])
             if not user:
-                return jsonify({'error': 'Usuário não encontrado'}), 404
+                return jsonify({'error': 'Usuário nao encontrado'}), 404
         task.user_id = data['user_id']
 
     if 'category_id' in data:
         if data['category_id']:
             cat = Category.query.get(data['category_id'])
             if not cat:
-                return jsonify({'error': 'Categoria não encontrada'}), 404
+                return jsonify({'error': 'Categoria nao encontrada'}), 404
         task.category_id = data['category_id']
 
     if 'due_date' in data:
@@ -226,7 +226,7 @@ def update_task(task_id):
 def delete_task(task_id):
     task = Task.query.get(task_id)
     if not task:
-        return jsonify({'error': 'Task não encontrada'}), 404
+        return jsonify({'error': 'Task nao encontrada'}), 404
 
     try:
         db.session.delete(task)

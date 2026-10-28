@@ -104,7 +104,7 @@ def summary_report():
 def user_report(user_id):
     user = User.query.get(user_id)
     if not user:
-        return jsonify({'error': 'Usuário não encontrado'}), 404
+        return jsonify({'error': 'Usuário nao encontrado'}), 404
 
     tasks = Task.query.filter_by(user_id=user_id).all()
 
@@ -191,7 +191,7 @@ def create_category():
 def update_category(cat_id):
     cat = Category.query.get(cat_id)
     if not cat:
-        return jsonify({'error': 'Categoria não encontrada'}), 404
+        return jsonify({'error': 'Categoria nao encontrada'}), 404
 
     data = request.get_json()
     if 'name' in data:
@@ -212,7 +212,7 @@ def update_category(cat_id):
 def delete_category(cat_id):
     cat = Category.query.get(cat_id)
     if not cat:
-        return jsonify({'error': 'Categoria não encontrada'}), 404
+        return jsonify({'error': 'Categoria nao encontrada'}), 404
 
     try:
         db.session.delete(cat)
