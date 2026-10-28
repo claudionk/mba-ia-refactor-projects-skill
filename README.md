@@ -1,3 +1,952 @@
+# Solução de Criação de Skills — Refatoração Arquitetural Automatizada
+
+---
+
+## Análise Manual
+
+### Projeto 1 — `code-smells-project` (Python/Flask — E-commerce API)
+
+| Severidade | Anti-Pattern | Arquivo | Linha(s) |
+|---|---|---|---|
+| CRITICAL | SQL Injection generalizado — todas as queries construídas por concatenação | `models.py` | 28, 48–50, 58–61, 68, 92, 109–111, 127–129, 140, 155, 164–165, 174, 188, 192, 280–281, 291–293 |
+| CRITICAL | Endpoint de execução arbitrária de SQL sem autenticação | `app.py` | 59–78 |
+| CRITICAL | `SECRET_KEY` hardcoded em código-fonte | `app.py` | 7 |
+| CRITICAL | `SECRET_KEY` exposta no response do health check | `controllers.py` | 289 |
+| HIGH | God File — `models.py` concentra 4 domínios + lógica de negócio + acesso a banco | `models.py` | 1–314 |
+| HIGH | Debug mode hardcoded | `app.py` | 8 |
+| HIGH | Senhas armazenadas e retornadas em texto puro | `models.py` | 75–87, 122–131 |
+| MEDIUM | N+1 Queries em pedidos (3 cursores aninhados em loop) | `models.py` | 171–200, 203–233 |
+| MEDIUM | Lógica de negócio (cálculo de desconto) dentro de função de modelo | `models.py` | 256–263 |
+| LOW | `print()` para logging em toda a camada de controllers | `controllers.py` | 8, 11, 57, 61, 106, 161, 179, 182, 208–210, 219 |
+| LOW | Magic numbers no cálculo de desconto (10000, 5000, 1000, 0.1, 0.05, 0.02) | `models.py` | 257–263 |
+| LOW | Endpoint `/admin/reset-db` sem proteção alguma deleta todos os dados | `app.py` | 47–57 |
+
+**Por que esses problemas são relevantes:** O SQL Injection em todas as queries torna a aplicação completamente vulnerável — qualquer usuário pode extrair ou destruir todos os dados. A `SECRET_KEY` exposta permite forjar sessões. O God File torna impossível testar qualquer domínio isoladamente.
+
+
+#### Resultado da execução da Skill
+
+```markdown
+================================
+ARCHITECTURE AUDIT REPORT
+================================
+Project: code-smells-project
+Stack:   Python + Flask
+Files:   4 analyzed | ~780 lines of code
+Date:    2026-10-27
+
+## Summary
+
+CRITICAL: 6 | HIGH: 5 | MEDIUM: 5 | LOW: 4
+Total findings: 20
+
+Deprecated APIs: nenhuma ocorrência de DEP-01 a DEP-04 (Flask 3.1.1 e `sqlite3` da stdlib).
+
+## Findings
+
+### [CRITICAL] SQL Injection no login (bypass de autenticação)
+File: models.py:105-111
+Anti-pattern: AP-01 — SQL Injection
+Description: `login_usuario` concatena `email` e `senha` direto na query:
+  "SELECT * FROM usuarios WHERE email = '" + email + "' AND senha = '" + senha + "'"
+Enviando `email = ' OR 1=1 --`, a query vira `WHERE email = '' OR 1=1 --...` e o trecho da senha é comentado. O `fetchone()` dev
+olve o primeiro usuário, que é o Admin (id 1, tipo admin). Achado por análise estática; payload não executado.
+Impact: Login como administrador via `POST /login` sem conhecer a senha.
+Recommendation: `cursor.execute("SELECT id, nome, email, tipo, senha FROM usuarios WHERE email = ?", (email,))` e comparar o has
+h com `check_password_hash` (ver C5).
+
+---
+
+### [CRITICAL] SQL Injection na busca pública de produtos (vazamento de tabelas)
+File: models.py:289-297; controllers.py:113-123
+Anti-pattern: AP-01 — SQL Injection
+Description: `termo` (query string `q`) e `categoria` são concatenados em `nome LIKE '%" + termo + "%'` e `categoria = '...'`. `
+GET /produtos/busca` não exige autenticação.
+Impact: Leitura de qualquer tabela via `UNION SELECT`, incluindo `usuarios.senha`. Exemplo de `q` (sintaxe conferida por análise
+): `x%') UNION SELECT id,nome,email,senha,tipo,criado_em,NULL,NULL FROM usuarios --`. Os dados saem no campo `dados` da resposta
+.
+Recommendation: `query += " AND (nome LIKE ? OR descricao LIKE ?)"` com parâmetros `(f"%{termo}%", f"%{termo}%")`; mesma correçã
+o para `categoria`, `preco_min` e `preco_max`.
+
+---
+
+### [CRITICAL] SQL Injection nas operações de escrita
+File: models.py:47-50, 58-60, 126-129, 148-151, 157-160, 164-166, 280
+Anti-pattern: AP-01 — SQL Injection
+Description: Campos de texto livre são concatenados em INSERT/UPDATE:
+  - `criar_produto` (nome, descricao, categoria)
+  - `atualizar_produto` (nome, descricao, categoria; a categoria nem é validada no controller)
+  - `criar_usuario` (nome, email, senha)
+  - `criar_pedido` (usuario_id, produto_id, quantidade, sem cast para inteiro)
+  - `atualizar_status_pedido` (novo_status, protegido pela whitelist do controller)
+Impact: Escrita arbitrária no banco e exfiltração por subconsulta. Exemplo: `nome = "x'||(SELECT group_concat(senha) FROM usuari
+os)||'"` grava as senhas no nome do produto, que sai em `GET /produtos`. O `sqlite3` recusa múltiplos statements, o que limita D
+ROP/DELETE encadeado, mas não subconsultas.
+Recommendation: Usar placeholders `?` em todas as chamadas `execute`; converter IDs com `int()` ou validar tipo no controller an
+tes de chegar ao model.
+
+---
+
+### [CRITICAL] Endpoints administrativos sem autenticação: SQL arbitrário e reset total
+File: app.py:47-57, 59-78
+Anti-pattern: AP-03 — Endpoint de Execução Arbitrária de SQL
+Description: `POST /admin/query` executa o campo `sql` do body diretamente com `cursor.execute`. `POST /admin/reset-db` executa
+`DELETE` em todas as tabelas. Nenhum dos dois verifica autenticação.
+Impact: Qualquer cliente pode apagar o banco inteiro, executar UPDATE/DELETE arbitrários e ler senhas com `SELECT ... FROM usuar
+ios`.
+Recommendation: Remover `/admin/query` do código de produção. Se necessário, substituir por comando CLI (`flask ...`) executado
+localmente. Proteger ou remover `/admin/reset-db`.
+
+---
+
+### [CRITICAL] Senhas em texto puro, armazenadas e devolvidas pela API
+File: models.py:79-86, 95-102, 110, 126-129; database.py:76-78
+Anti-pattern: AP-04 — Senha em Texto Puro / Retorno de senha no payload
+Description: `criar_usuario` grava `senha` sem hash (models.py:126-129). `get_todos_usuarios` (79-86) e `get_usuario_por_id` (95
+-102) incluem `"senha": row["senha"]` no retorno, então `GET /usuarios` e `GET /usuarios/<id>` expõem todas as senhas. O login c
+ompara a senha em claro na SQL (110). O seed cria senhas fracas: `admin123`, `123456`, `senha123` (database.py:76-78).
+Impact: Qualquer cliente anônimo lista todas as senhas. O vazamento do arquivo `loja.db` expõe todas as credenciais em claro.
+Recommendation: Gerar hash com `werkzeug.security.generate_password_hash` (Werkzeug já vem com Flask) em `criar_usuario`; valida
+r com `check_password_hash` no login; remover `senha` de todos os dicts de retorno; redefinir as senhas do seed.
+
+---
+
+### [CRITICAL] Secrets e credenciais hardcoded, incluindo exposição no /health
+File: app.py:7; database.py:76; controllers.py:289
+Anti-pattern: AP-02 — Hardcoded Credentials / Secrets
+Description: `app.config["SECRET_KEY"] = "minha-chave-super-secreta-123"` é literal (app.py:7) e é devolvida em claro por `GET /
+health` (controllers.py:289). A conta `admin@loja.com` / `admin123` é criada automaticamente no seed (database.py:76).
+Impact: Qualquer visitante obtém a SECRET_KEY e pode forjar cookies de sessão assinados. A credencial de admin está pública no r
+epositório.
+Recommendation: `app.config["SECRET_KEY"] = os.environ["SECRET_KEY"]` (falhar na inicialização se ausente); remover `secret_key`
+ do `/health`; criar o admin por comando de setup com senha vinda de variável de ambiente, não do seed.
+
+---
+
+### [HIGH] God File: models.py concentra SQL, regra de negócio e serialização
+File: models.py:1-314 (destaques: 133-169, 256-262)
+Anti-pattern: AP-05 — God Class / God File
+Description: `models.py` tem 314 linhas e 18 funções. Além de acesso a dados, contém: cálculo de total e checagem de estoque em
+`criar_pedido` (133-169); regra de desconto por faixas de faturamento em `relatorio_vendas` (256-262, com limites 10000/5000/100
+0 e percentuais 0.1/0.05/0.02); composição do relatório e ticket médio.
+Impact: Alterar uma regra de desconto exige mexer no módulo de persistência. Não é possível testar a regra sem SQLite. As camada
+s ficam acopladas.
+Recommendation: Mover cálculo de total, validação de estoque e desconto para a camada de regra de negócio; `models` fica só com
+queries. Detalhes na Fase 3, conforme `04-mvc-guidelines.md`.
+
+---
+
+### [HIGH] Controllers misturam validação, acesso direto ao banco e resposta HTTP
+File: controllers.py:24-62, 64-96, 188-220, 264-292
+Anti-pattern: AP-06 — Lógica de Negócio em Route Handler
+Description: `health_check` (264-292) executa 4 queries SQL direto via `get_db()`, sem passar pelo model. `criar_pedido` (188-22
+0) orquestra validação, persistência e notificações. As linhas 208-210 imprimem "ENVIANDO EMAIL / SMS / PUSH", mas nada é enviad
+o. Regras de domínio (categorias válidas em 52, preço e estoque em 43-46) ficam dentro do handler.
+Impact: A regra não pode ser testada sem subir o Flask. O health check fica acoplado ao schema. O log sugere notificações que nã
+o existem.
+Recommendation: `health_check` chama `models.contar_registros()`; validação em módulo próprio; notificações atrás de uma interfa
+ce explícita, ou removidas até existirem de verdade.
+
+---
+
+### [HIGH] Duplicação (DRY): serialização, validação e montagem de pedidos
+File: models.py:10-21, 31-40, 304-313; models.py:79-86, 95-102; models.py:178-199, 211-231; controllers.py:26-46, 66-90
+Anti-pattern: AP-07 — Lógica de Negócio Duplicada
+Description: O dict de produto (8 campos) aparece 3 vezes. O dict de usuário aparece 2 vezes. O bloco "monta pedido + itens + no
+me do produto" é quase idêntico em `get_pedidos_usuario` (178-199) e `get_todos_pedidos` (211-231), cerca de 20 linhas. A valida
+ção de nome, preço e estoque está duplicada entre `criar_produto` (26-46) e `atualizar_produto` (66-90), e as duas divergem: a c
+ategoria só é validada na criação.
+Impact: Uma correção em um lugar não chega aos outros. A divergência já causa um bug: `PUT /produtos/<id>` aceita categoria invá
+lida.
+Recommendation: Extrair `_produto_to_dict(row)`, `_usuario_to_dict(row)` e `_montar_pedido(...)` no model; `validar_produto(dado
+s)` compartilhado entre criar e atualizar.
+
+---
+
+### [HIGH] Debug ativo e vazamento de informações internas
+File: app.py:8, 78, 88; controllers.py:12, 22, 62, 96, 109, 126, 134, 144, 165, 186, 220, 227, 235, 255, 262, 284-292
+Anti-pattern: AP-08 — Debug Mode em Produção / Informações Sensíveis no Response
+Description: `app.config["DEBUG"] = True` (app.py:8) e `app.run(host="0.0.0.0", debug=True)` (app.py:88), que expõe o console in
+terativo do Werkzeug na rede. O `/health` devolve `"ambiente": "producao"` junto com `"debug": True`, `"db_path"` e `secret_key`
+ (controllers.py:284-289). Há 17 respostas 500 que devolvem `str(e)` (16 em controllers.py e 1 em app.py:78), o que expõe mensag
+ens internas do SQLite e do Python.
+Impact: Estrutura do banco e do código vazada a qualquer cliente. Quem obtiver o PIN do debugger do Werkzeug ganha execução de c
+ódigo no servidor.
+Recommendation: `DEBUG` lido de variável de ambiente, com padrão `False`; `host="127.0.0.1"` em desenvolvimento; respostas 500 g
+enéricas com `logger.exception` no servidor; remover campos internos do `/health`.
+
+---
+
+### [HIGH] Ausência de autenticação e autorização (fora do catálogo)
+File: app.py:11-26
+Anti-pattern: Não catalogado. Extensão de AP-03 e AP-08, anotado aqui.
+Description: Nenhuma rota exige token ou sessão. `PUT /produtos/<id>`, `DELETE /produtos/<id>`, `PUT /pedidos/<id>/status` e `PO
+ST /usuarios` são públicos. Qualquer cliente altera preço, apaga produto ou cancela pedido de terceiros. O campo `tipo` do usuár
+io não é usado em nenhuma checagem de permissão.
+Impact: Qualquer visitante anônimo executa operações administrativas.
+Recommendation: Autenticação por token ou sessão e decorator de autorização (`@requer_admin`) nas rotas de escrita; `tipo` verif
+icado no servidor.
+
+---
+
+### [MEDIUM] N+1 Query Problem
+File: models.py:177-200, 209-232, 154-156
+Anti-pattern: AP-09 — N+1 Query Problem
+Description: `get_pedidos_usuario` e `get_todos_pedidos` executam 1 query por pedido (188, 220) e 1 query por item (191-193, 223
+-225). Com P pedidos e I itens no total, são 1 + P + I queries. Em `criar_pedido`, o preço de cada produto é consultado duas vez
+es (140-141 e 155-156).
+Impact: `GET /pedidos` degrada linearmente. Com 100 pedidos de 3 itens cada, são 401 queries em uma requisição.
+Recommendation: Um `JOIN` entre `itens_pedido` e `produtos` em uma query, agrupando em Python. Reutilizar o produto carregado no
+ loop de validação de `criar_pedido`.
+
+---
+
+### [MEDIUM] Estado global mutável: conexão única compartilhada entre requests
+File: database.py:4-11, 86; models.py:134-169
+Anti-pattern: AP-10 — Estado Global Mutável
+Description: `db_connection` é global. Uma única conexão SQLite com `check_same_thread=False` é usada por todas as threads do Fl
+ask. A inicialização é lazy e sem lock. `criar_pedido` faz vários INSERT/UPDATE e só commita no fim, sem rollback no erro. Como
+a conexão é compartilhada, escritas pendentes de uma request são persistidas pelo próximo `commit()` de outra. A checagem de est
+oque (144) e o UPDATE (164) são separados, sem transação nem lock.
+Impact: Pedido parcial gravado por outra request. Overselling sob concorrência, já que dois pedidos podem passar na checagem ant
+es de qualquer um atualizar o estoque.
+Recommendation: Conexão por request (com `g` do Flask ou abrir e fechar por operação); `BEGIN IMMEDIATE` em `criar_pedido`; `rol
+lback()` no `except`.
+
+---
+
+### [MEDIUM] Quantidade zero ou negativa aceita em pedidos
+File: controllers.py:195-201; models.py:143-166
+Anti-pattern: AP-11 — Ausência de Validação de Entrada
+Description: `criar_pedido` valida só a presença de `itens` e `usuario_id`. `quantidade` não é validada. Com `quantidade = -100`
+, a checagem `produto["estoque"] < item["quantidade"]` (144) passa, `total` fica negativo (146) e `estoque - (-100)` aumenta o e
+stoque (164-166).
+Impact: Um cliente cria pedido com quantidade negativa, aumenta o estoque sem limite e gera total negativo, distorcendo `relator
+io_vendas` (faturamento, desconto e líquido).
+Recommendation: Validar `quantidade` como inteiro maior que zero, e `produto_id` como inteiro, antes da persistência.
+
+---
+
+### [MEDIUM] Validação de tipos e de corpo da requisição ausente
+File: controllers.py:169-171, 239-240, 113-121, 26-46, 66-90, 153-158
+Anti-pattern: AP-11 — Ausência de Validação de Entrada
+Description:
+  - `login` (169-171) e `atualizar_status_pedido` (239-240) chamam `dados.get(...)` sem checar `None`. Body ausente ou `null` ge
+ra `AttributeError` e resposta 500.
+  - Corpo JSON malformado também vira 500: o `except Exception` captura o `BadRequest` do Flask.
+  - `preco` e `estoque` não são checados como numéricos. Com `"preco": "abc"`, `preco < 0` (43, 87) levanta `TypeError` e respos
+ta 500.
+  - `preco_min` e `preco_max` (118-121) são convertidos com `float()` sem tratamento. Valor inválido gera `ValueError` e respost
+a 500.
+  - `email` não tem formato validado (154). `atualizar_produto` não valida categoria (85) nem tamanho de nome.
+Impact: Erros 500 onde deveria haver 400. Combinado com H4, as mensagens internas vazam.
+Recommendation: Validação centralizada de tipo, formato e obrigatoriedade (função de validação ou biblioteca de schema). Usar `r
+equest.get_json(silent=True)` e responder 400 quando o body não for objeto JSON.
+
+---
+
+### [MEDIUM] Exceções capturadas sem log
+File: controllers.py:21-22, 95-96, 108-109, 125-126, 133-134, 143-144, 164-165, 185-186, 226-227, 234-235, 254-255, 261-262; app
+.py:77-78
+Anti-pattern: AP-12 — Bare Except / Swallowed Exceptions
+Description: 13 blocos `except Exception as e` retornam `str(e)` sem `print` nem logging. Outros blocos (`listar_produtos`, `cri
+ar_produto`, `criar_pedido`) imprimem a mensagem, mas sem traceback. Falhas em `login` e `criar_usuario` não são registradas.
+Impact: Falhas em produção sem rastro. Diagnosticar exige reproduzir o erro.
+Recommendation: `logger.exception(...)` no `except` e resposta 500 genérica para o cliente.
+
+---
+
+### [LOW] print() usado como logging
+File: controllers.py:8, 11, 57, 61, 106, 161, 179, 182, 208-210, 219, 248, 250; app.py:56, 83-86
+Anti-pattern: AP-13 — Print / Console.log para Logging
+Description: 19 chamadas `print`. Em 208-210, as mensagens "ENVIANDO EMAIL / SMS / PUSH" dizem que notificações foram enviadas,
+mas são só prints. Os logs de login (179, 182) gravam o e-mail do usuário em claro.
+Impact: Sem níveis e sem rotação. Logs enganosos. Dados pessoais nos logs.
+Recommendation: Módulo `logging` com níveis. Substituir as simulações de notificação por uma interface real ou removê-las.
+
+---
+
+### [LOW] Magic numbers e strings
+File: models.py:247-262; controllers.py:47-52, 242; database.py:5; app.py:88
+Anti-pattern: AP-14 — Magic Numbers / Magic Strings
+Description: Faixas de desconto (10000, 5000, 1000) e percentuais (0.1, 0.05, 0.02) inline em `relatorio_vendas`. Status de pedi
+do literais em models.py:247-253 e em lista em controllers.py:242. Limites de nome (2 e 200) em 47 e 49. Lista de categorias em
+52, sem constante compartilhada com o seed (database.py:59-69). Caminho `"loja.db"` e porta `5000` literais.
+Recommendation: Constantes nomeadas (`FAIXAS_DESCONTO`, `STATUS_PEDIDO`, `CATEGORIAS_VALIDAS`, `DB_PATH`).
+
+---
+
+### [LOW] Nomes sem semântica e sombreamento de built-in
+File: controllers.py:14, 56, 64, 98, 136, 160; models.py:24, 54, 65, 89, 187-193, 219-225
+Anti-pattern: AP-15 — Nomes de Variáveis Sem Semântica
+Description: `id` sombreia o built-in `id()` em 10 funções. `cursor2`, `cursor3`, `prod`, `rows`, `result` e `dados` são genéric
+os demais.
+Recommendation: `produto_id`, `usuario_id`, `cursor_itens`, `cursor_produto`, `itens_rows`.
+
+---
+
+### [LOW] Imports não utilizados
+File: models.py:2; database.py:2
+Anti-pattern: AP-16 — Imports Não Utilizados
+Description: `import sqlite3` em `models.py` não é referenciado. `import os` em `database.py` também não.
+Recommendation: Remover os dois imports.
+
+---
+
+## Observações fora do catálogo (não entram na contagem)
+
+- **Cancelamento não devolve estoque:** `controllers.py:249-250` imprime "Devolver estoque", mas nenhum código faz isso.
+- **Transição de status livre:** qualquer status pode ir para qualquer outro (`controllers.py:242-245`).
+- **Usuário não verificado no pedido:** `criar_pedido` não confere se `usuario_id` existe (`controllers.py:198-199`).
+- **Relatório inclui cancelados:** `relatorio_vendas` soma pedidos cancelados no faturamento (`models.py:242-243`) e no ticket m
+## Observações fora do catálogo (não entram na contagem)
+
+- **Cancelamento não devolve estoque:** `controllers.py:249-250` imprime "Devolver estoque", mas nenhum código faz isso.
+- **Transição de status livre:** qualquer status pode ir para qualquer outro (`controllers.py:242-245`).
+- **Usuário não verificado no pedido:** `criar_pedido` não confere se `usuario_id` existe (`controllers.py:198-199`).
+- **Relatório inclui cancelados:** `relatorio_vendas` soma pedidos cancelados no faturamento (`models.py:242-243`) e no ticket m
+édio (`models.py:272`).
+- **CORS aberto:** `CORS(app)` (`app.py:9`) libera qualquer origem.
+- **Versão de Python não declarada:** `requirements.txt` lista só `flask` e `flask-cors`. O `__pycache__` indica CPython 3.14.
+
+================================
+Total: 20 findings
+CRITICAL: 6 | HIGH: 5 | MEDIUM: 5 | LOW: 4
+================================
+
+Phase 2 complete. Proceed with refactoring (Phase 3)? [y/n]
+
+---
+
+================================
+PHASE 1: PROJECT ANALYSIS
+
+Language:      Python (versão não declarada; __pycache__ indica CPython 3.14)
+Framework:     Flask 3.1.1
+Dependencies:  flask==3.1.1, flask-cors==5.0.1, sqlite3 (stdlib)
+Domain:        API de e-commerce para gestão de produtos, usuários, pedidos e relatório de vendas
+Architecture:  Semi-estruturada / Pseudo-MVC. app.py mistura rotas, endpoints admin e config. controllers.py mistura HTTP, validação e regra de negócio. models.py mistura SQL e regra de negócio. database.py faz conexão, schema e seed. Não há diretórios por camada.
+Source files:  4 files analyzed (~780 linhas)
+DB:            SQLite (loja.db), SQL raw com concatenação de strings, sem ORM e sem migrations. Schema criado por CREATE TABLE IF NOT EXISTS em get_db().
+
+================================
+ARCHITECTURE AUDIT REPORT
+
+Project: code-smells-project
+Stack:   Python + Flask
+Files:   4 analyzed | ~780 lines of code
+Date:    2026-10-27
+
+Summary
+
+CRITICAL: 6 | HIGH: 5 | MEDIUM: 5 | LOW: 4
+Total findings: 20
+
+Deprecated APIs: nenhuma ocorrência de DEP-01 a DEP-04 (Flask 3.1.1 e sqlite3 da stdlib).
+
+Findings
+
+[CRITICAL] SQL Injection no login (bypass de autenticação)
+
+File: models.py:105-111
+Anti-pattern: AP-01 — SQL Injection
+Description: login_usuario concatena email e senha direto na query. Enviando email = ' OR 1=1 --, a query vira WHERE email = '' OR 1=1 --... e o trecho da senha é comentado. O fetchone() devolve o primeiro usuário, que é o Admin (id 1, tipo admin). Achado por análise estática; payload não executado.
+Impact: Login como administrador via POST /login sem conhecer a senha.
+Recommendation: SELECT ... FROM usuarios WHERE email = ? com parâmetros, e comparar hash com check_password_hash (ver C5).
+
+[CRITICAL] SQL Injection na busca pública de produtos (vazamento de tabelas)
+
+File: models.py:289-297; controllers.py:113-123
+Anti-pattern: AP-01 — SQL Injection
+Description: termo (query string q) e categoria são concatenados em nome LIKE '%" + termo + "%' e categoria = '...'. GET /produtos/busca não exige autenticação.
+Impact: Leitura de qualquer tabela via UNION SELECT, incluindo usuarios.senha. Exemplo de q (sintaxe conferida por análise): x%') UNION SELECT id,nome,email,senha,tipo,criado_em,NULL,NULL FROM usuarios --. Os dados saem no campo dados.
+Recommendation: " AND (nome LIKE ? OR descricao LIKE ?)" com parâmetros (f"%{termo}%", f"%{termo}%"); mesma correção para categoria, preco_min e preco_max.
+
+[CRITICAL] SQL Injection nas operações de escrita
+
+File: models.py:47-50, 58-60, 126-129, 148-151, 157-160, 164-166, 280
+Anti-pattern: AP-01 — SQL Injection
+Description: Campos de texto livre são concatenados em INSERT/UPDATE: criar_produto (nome, descricao, categoria), atualizar_produto (nome, descricao, categoria, sem validação de categoria), criar_usuario (nome, email, senha), criar_pedido (usuario_id, produto_id, quantidade, sem cast) e atualizar_status_pedido (protegido pela whitelist do controller).
+Impact: Escrita arbitrária e exfiltração por subconsulta. Exemplo: nome = "x'||(SELECT group_concat(senha) FROM usuarios)||'" grava as senhas no nome do produto, que sai em GET /produtos. O sqlite3 recusa múltiplos statements, o que limita DROP encadeado, mas não subconsultas.
+Recommendation: Placeholders ? em todos os execute; converter IDs com int() ou validar tipo no controller.
+
+[CRITICAL] Endpoints administrativos sem autenticação: SQL arbitrário e reset total
+
+File: app.py:47-57, 59-78
+Anti-pattern: AP-03 — Endpoint de Execução Arbitrária de SQL
+Description: POST /admin/query executa o campo sql do body diretamente. POST /admin/reset-db executa DELETE em todas as tabelas. Nenhum dos dois verifica autenticação.
+Impact: Qualquer cliente apaga o banco inteiro, executa UPDATE/DELETE arbitrários e lê senhas com SELECT ... FROM usuarios.
+Recommendation: Remover /admin/query do código de produção, substituindo por comando CLI local se necessário. Proteger ou remover /admin/reset-db.
+
+[CRITICAL] Senhas em texto puro, armazenadas e devolvidas pela API
+
+File: models.py:79-86, 95-102, 110, 126-129; database.py:76-78
+Anti-pattern: AP-04 — Senha em Texto Puro / Retorno de senha no payload
+Description: criar_usuario grava senha sem hash. get_todos_usuarios e get_usuario_por_id incluem "senha" no retorno, então GET /usuarios e GET /usuarios/<id> expõem todas as senhas. O login compara em claro. O seed cria senhas fracas: admin123, 123456, senha123.
+Impact: Qualquer cliente anônimo lista todas as senhas. Vazamento do loja.db expõe todas as credenciais.
+Recommendation: werkzeug.security.generate_password_hash em criar_usuario e check_password_hash no login. Remover senha de todos os retornos. Redefinir as senhas do seed.
+
+[CRITICAL] Secrets e credenciais hardcoded, incluindo exposição no /health
+
+File: app.py:7; database.py:76; controllers.py:289
+Anti-pattern: AP-02 — Hardcoded Credentials / Secrets
+Description: SECRET_KEY = "minha-chave-super-secreta-123" é literal (app.py:7) e é devolvida em claro por GET /health (controllers.py:289). A conta admin@loja.com / admin123 é criada no seed (database.py:76).
+Impact: Qualquer visitante obtém a SECRET_KEY e pode forjar cookies de sessão. A credencial de admin está pública no repositório.
+Recommendation: Ler SECRET_KEY de variável de ambiente, sem fallback literal. Remover secret_key do /health. Criar o admin por comando de setup, não pelo seed.
+
+[HIGH] God File: models.py concentra SQL, regra de negócio e serialização
+
+File: models.py:1-314 (destaques: 133-169, 256-262)
+Anti-pattern: AP-05 — God Class / God File
+Description: Além de acesso a dados, models.py contém o cálculo de total e a checagem de estoque em criar_pedido (133-169), a regra de desconto por faixas em relatorio_vendas (256-262, limites 10000/5000/1000 e percentuais 0.1/0.05/0.02) e a composição do relatório.
+Impact: Alterar uma regra de desconto exige mexer no módulo de persistência. A regra não é testável sem SQLite.
+Recommendation: Mover total, estoque e desconto para a camada de regra de negócio. models fica só com queries. Detalhes na Fase 3.
+
+[HIGH] Controllers misturam validação, acesso direto ao banco e resposta HTTP
+
+File: controllers.py:24-62, 64-96, 188-220, 264-292
+Anti-pattern: AP-06 — Lógica de Negócio em Route Handler
+Description: health_check (264-292) executa 4 queries SQL direto via get_db(). criar_pedido orquestra validação, persistência e notificações. As linhas 208-210 imprimem "ENVIANDO EMAIL / SMS / PUSH", mas nada é enviado. Regras de domínio (categorias em 52, preço e estoque em 43-46) ficam no handler.
+Impact: Regra não testável sem subir o Flask. O health check fica acoplado ao schema. O log sugere notificações que não existem.
+Recommendation: health_check chama models.contar_registros(). Validação em módulo próprio. Notificações atrás de interface explícita, ou removidas.
+
+[HIGH] Duplicação (DRY): serialização, validação e montagem de pedidos
+
+File: models.py:10-21, 31-40, 304-313; models.py:79-86, 95-102; models.py:178-199, 211-231; controllers.py:26-46, 66-90
+Anti-pattern: AP-07 — Lógica de Negócio Duplicada
+Description: O dict de produto (8 campos) aparece 3 vezes e o de usuário 2 vezes. O bloco "monta pedido + itens" é quase idêntico em get_pedidos_usuario e get_todos_pedidos, cerca de 20 linhas. A validação de produto está duplicada entre criar e atualizar, e as duas divergem: a categoria só é validada na criação.
+Impact: Correção em um lugar não chega aos outros. A divergência já é um bug: PUT /produtos/<id> aceita categoria inválida.
+Recommendation: _produto_to_dict(row), _usuario_to_dict(row), _montar_pedido(...) e validar_produto(dados) compartilhado.
+
+[HIGH] Debug ativo e vazamento de informações internas
+
+File: app.py:8, 78, 88; controllers.py:12, 22, 62, 96, 109, 126, 134, 144, 165, 186, 220, 227, 235, 255, 262, 284-292
+Anti-pattern: AP-08 — Debug Mode em Produção / Informações Sensíveis no Response
+Description: DEBUG = True (app.py:8) e app.run(host="0.0.0.0", debug=True) (app.py:88), que expõe o console do Werkzeug na rede. O /health devolve "ambiente": "producao" junto com "debug": True, "db_path" e secret_key. São 17 respostas 500 com str(e) (16 em controllers.py e 1 em app.py:78).
+Impact: Estrutura do banco e do código vazada. Quem obtiver o PIN do debugger ganha execução de código no servidor.
+Recommendation: DEBUG por variável de ambiente, padrão False. host="127.0.0.1" em desenvolvimento. Respostas 500 genéricas com logger.exception. Remover campos internos do /health.
+
+[HIGH] Ausência de autenticação e autorização (fora do catálogo)
+
+File: app.py:11-26
+Anti-pattern: Não catalogado. Extensão de AP-03 e AP-08.
+Description: Nenhuma rota exige token ou sessão. PUT /produtos/<id>, DELETE /produtos/<id>, PUT /pedidos/<id>/status e POST /usuarios são públicos. O campo tipo não é usado em nenhuma checagem de permissão.
+Impact: Qualquer visitante anônimo executa operações administrativas.
+Recommendation: Autenticação por token ou sessão e decorator @requer_admin nas rotas de escrita.
+
+[MEDIUM] N+1 Query Problem
+
+File: models.py:177-200, 209-232, 154-156
+Anti-pattern: AP-09 — N+1 Query Problem
+Description: get_pedidos_usuario e get_todos_pedidos executam 1 query por pedido e 1 por item. Com P pedidos e I itens, são 1 + P + I queries. Em criar_pedido, o preço de cada produto é consultado duas vezes (140-141 e 155-156).
+Impact: GET /pedidos degrada linearmente. Com 100 pedidos de 3 itens, são 401 queries em uma requisição.
+Recommendation: JOIN entre itens_pedido e produtos. Reutilizar o produto carregado em criar_pedido.
+
+[MEDIUM] Estado global mutável: conexão única compartilhada entre requests
+
+File: database.py:4-11, 86; models.py:134-169
+Anti-pattern: AP-10 — Estado Global Mutável
+Description: db_connection é global e uma única conexão com check_same_thread=False é usada por todas as threads. A inicialização é lazy e sem lock. criar_pedido faz vários writes e só commita no fim, sem rollback no erro. Escritas pendentes de uma request são persistidas pelo commit() de outra. A checagem de estoque (144) e o UPDATE (164) não são atômicos.
+Impact: Pedido parcial gravado por outra request. Overselling sob concorrência.
+Recommendation: Conexão por request. BEGIN IMMEDIATE em criar_pedido. rollback() no except.
+
+[MEDIUM] Quantidade zero ou negativa aceita em pedidos
+
+File: controllers.py:195-201; models.py:143-166
+Anti-pattern: AP-11 — Ausência de Validação de Entrada
+Description: quantidade não é validada. Com quantidade = -100, a checagem de estoque (144) passa, total fica negativo (146) e estoque - (-100) aumenta o estoque (164-166).
+Impact: Estoque inflado sem limite e total negativo, distorcendo relatorio_vendas.
+Recommendation: Validar quantidade como inteiro maior que zero e produto_id como inteiro antes da persistência.
+
+[MEDIUM] Validação de tipos e de corpo da requisição ausente
+
+File: controllers.py:169-171, 239-240, 113-121, 26-46, 66-90, 153-158
+Anti-pattern: AP-11 — Ausência de Validação de Entrada
+Description: login (169-171) e atualizar_status_pedido (239-240) chamam dados.get sem checar None. JSON malformado também vira 500, pois o except Exception captura o BadRequest do Flask. preco e estoque não são checados como numéricos ("abc" gera TypeError em 43). preco_min/preco_max com float() sem tratamento. Email sem formato validado.
+Impact: Erros 500 onde deveria haver 400. Combinado com H4, as mensagens internas vazam.
+Recommendation: Validação centralizada de tipo, formato e obrigatoriedade. request.get_json(silent=True) e 400 quando o body não for objeto JSON.
+
+[MEDIUM] Exceções capturadas sem log
+
+File: controllers.py:21-22, 95-96, 108-109, 125-126, 133-134, 143-144, 164-165, 185-186, 226-227, 234-235, 254-255, 261-262; app.py:77-78
+Anti-pattern: AP-12 — Bare Except / Swallowed Exceptions
+Description: 13 blocos except Exception as e retornam str(e) sem log. Falhas em login e criar_usuario não são registradas.
+Impact: Falhas em produção sem rastro.
+Recommendation: logger.exception(...) no except e resposta 500 genérica para o cliente.
+
+[LOW] print() usado como logging
+
+File: controllers.py:8, 11, 57, 61, 106, 161, 179, 182, 208-210, 219, 248, 250; app.py:56, 83-86
+Anti-pattern: AP-13 — Print / Console.log para Logging
+Description: 19 chamadas print. Em 208-210, as mensagens "ENVIANDO EMAIL / SMS / PUSH" dizem que notificações foram enviadas, mas são só prints. Os logs de login (179, 182) gravam o e-mail em claro.
+Impact: Logs enganosos e dados pessoais nos logs.
+Recommendation: Módulo logging com níveis. Substituir ou remover as simulações de notificação.
+
+[LOW] Magic numbers e strings
+
+File: models.py:247-262; controllers.py:47-52, 242; database.py:5; app.py:88
+Anti-pattern: AP-14 — Magic Numbers / Magic Strings
+Description: Faixas e percentuais de desconto inline. Status literais em models.py:247-253 e em lista em controllers.py:242. Limites de nome (2, 200). Lista de categorias sem constante compartilhada com o seed. Caminho "loja.db" e porta 5000 literais.
+Recommendation: FAIXAS_DESCONTO, STATUS_PEDIDO, CATEGORIAS_VALIDAS, DB_PATH.
+
+[LOW] Nomes sem semântica e sombreamento de built-in
+
+File: controllers.py:14, 56, 64, 98, 136, 160; models.py:24, 54, 65, 89, 187-193, 219-225
+Anti-pattern: AP-15 — Nomes de Variáveis Sem Semântica
+Description: id sombreia o built-in id() em 10 funções. cursor2, cursor3, prod, rows, result e dados são genéricos.
+Recommendation: produto_id, usuario_id, cursor_itens, cursor_produto.
+
+[LOW] Imports não utilizados
+
+File: models.py:2; database.py:2
+Anti-pattern: AP-16 — Imports Não Utilizados
+Description: import sqlite3 em models.py e import os em database.py não são referenciados.
+Recommendation: Remover os dois imports.
+
+Observações fora do catálogo (não entram na contagem)
+
+- Cancelamento não devolve estoque: controllers.py:249-250 imprime "Devolver estoque", mas nenhum código faz isso.
+- Transição de status livre: qualquer status pode ir para qualquer outro (controllers.py:242-245).
+- Usuário não verificado no pedido: criar_pedido não confere se usuario_id existe (controllers.py:198-199).
+- Relatório inclui cancelados: relatorio_vendas soma pedidos cancelados no faturamento (models.py:242-243) e no ticket médio (models.py:272).
+- CORS aberto: CORS(app) (app.py:9) libera qualquer origem.
+- Versão de Python não declarada: requirements.txt lista só flask e flask-cors.
+
+================================
+Total: 20 findings
+CRITICAL: 6 | HIGH: 5 | MEDIUM: 5 | LOW: 4
+
+================================
+PHASE 2 COMPLETE
+
+Relatório salvo em: reports/audit-project-1.md
+Total de findings: 20
+
+Phase 3 vai reestruturar o projeto para o padrão MVC.
+Todos os arquivos originais serão modificados ou movidos.
+
+Proceed with refactoring (Phase 3)? [y/n]
+
+
+Fase 1 e 2 concluídas. A Fase 3 não foi iniciada, porque o skill exige a sua confirmação. Antes de responder:
+
+- Número do projeto: usei 1. Inferi pelo PLAN_PROJECT_1.md, que descreve code-smells-project como Projeto 1. Se não for esse o número, me diga e eu renomeio o relatório.
+- Payloads: os exemplos de injection foram verificados por análise estática do código. Não executei contra o loja.db.
+- Escopo da Fase 3: a reestruturação altera ou move todos os arquivos (app.py, controllers.py, models.py, database.py) e vai corrigir os 6 CRITICAL e os 5 HIGH. Preciso ler 04-mvc-guidelines.md e 05-refactoring-playbook.md antes de começar.
+
+Responda y para seguir com a Fase 3, ou n para parar aqui.
+
+---
+A Fase 3 está concluída, e a aplicação sobe e responde corretamente. Nada foi commitado.
+
+Nova estrutura
+
+code-smells-project/
+├── app.py                        entry point (create_app)
+├── database.py                   conexão por request, schema, seed, transacao()
+├── config/settings.py            configuração via variáveis de ambiente
+├── models/                       SQL parametrizado, sem regra de negócio
+│   ├── produto_model.py
+│   ├── usuario_model.py
+│   ├── pedido_model.py           JOIN único em vez de N+1
+│   └── sistema_model.py
+├── controllers/                  regras de negócio e validação
+│   ├── produto_controller.py
+│   ├── usuario_controller.py     hash de senha, login, migração
+│   ├── pedido_controller.py      estoque, total, transação
+│   ├── relatorio_controller.py   faixas de desconto
+│   ├── sistema_controller.py
+│   ├── validacao.py
+│   └── erros.py
+├── routes/                       blueprints HTTP, uma por domínio
+├── middlewares/
+│   ├── auth.py                   requer_admin (header X
+│   └── error_handler.py          erros padronizados, 500 genérico
+├── .env.example                  novo
+└── README.md                     configuração e autenticação documentadas
+
+models.py e controllers.py antigos foram removidos.
+
+Findings resolvidos
+
+- CRITICAL
+  - C1 login bypass: resolvido com consulta parametrizada.
+  - C2 UNION na busca: resolvido. Testado com o payload do relatório, sem vazamento.
+  - C3 concatenação nas escritas: resolvido em todos os models.
+  - C4 /admin/query removido. /admin/reset-db continua, mas protegido por token.
+  - C5 senhas: hash com werkzeug.security, senha removid
+  - C6 parcial: a SECRET_KEY literal foi removida e o /health não expõe mais a chave. O admin seed admin123 continua no código, agora com hash.
+    Precisa de uma decisão sua (ver abaixo).
+- HIGH
+  - H1 e H2: regras de negócio saíram de models e routes SQL direto.
+  - H3: duplicação removida. A validação de produto agora é a mesma na criação e na atualização.
+  - H4: DEBUG e host de rede agora têm padrão seguro. Erros 500 não expõem mais str(e).
+  - H5 (fora do catálogo): rotas de escrita e leitura adoken.
+- MEDIUM
+  - M1: N+1 eliminado com JOIN.
+  - M2: conexão por request, BEGIN IMMEDIATE nos pedidos e rollback em erro. Isso também fecha o overselling.
+  - M3: quantidade zero ou negativa é rejeitada.
+  - M4: tipos e corpo JSON validados, respondendo 400 em vez de 500.
+  - M5: erros são registrados com logger.exception.
+- LOW: print trocado por logging, constantes nomeadas, id renomeado para produto_id, imports não usados removidos.
+
+Validação
+
+- Testes de contrato: 57 verificações via test client, todas passando. Cobrem todos os endpoints, os códigos de erro e os casos de injeção. O banco usado foi temporário, o loja.db não foi tocado.
+- Boot real: python app.py subiu e respondeu. /health re sem token e 200 com token, e /admin/query deu 404.
+- Migração: senhas em texto puro de bancos antigos são aceitas uma vez no login e regravadas com hash.
+
+Mudanças de contrato (intencionais)
+
+- senha não aparece mais em GET /usuarios nem em GET /usuarios/<id>.
+- /health não retorna mais secret_key, db_path, debug ne
+- POST /admin/query foi removido.
+- Rotas admin exigem X-Admin-Token. Sem ADMIN_TOKEN configurado, respondem 403.
+- usuario_id, produto_id e quantidade precisam ser inteipela concatenação.
+- Erros de validação agora trazem "sucesso": false. Rotas desconhecidas respondem JSON.
+- O servidor escuta em 127.0.0.1 por padrão. Para acesso.0.
+
+Decisões que tomei
+
+- werkzeug.security em vez de bcrypt: o Flask já traz o  dependência.
+- Token único em vez de login por usuário: é o mínimo para cumprir H5. Autenticação por usuário é um passo maior.
+
+Pendências que precisam da sua decisão
+
+1. Admin seed (admin123): removo a criação automática do admin e passo a exigir um comando de setup, ou mantenho para demo?
+2. Pendências fora do escopo desta fase:
+   - GET /pedidos/usuario/<id> continua público, então qualquer um lê pedidos de outro usuário.
+   - O cancelamento não devolve o estoque, e o relatório soma pedidos cancelados no faturamento.
+   - CORS continua aberto para qualquer origem.
+
+```
+
+
+---
+
+### Projeto 2 — `ecommerce-api-legacy` (Node.js/Express — LMS API)
+
+| Severidade | Anti-Pattern | Arquivo | Linha(s) |
+|---|---|---|---|
+| CRITICAL | God Class `AppManager` — DB + rotas + lógica de negócio + hash em uma classe | `src/AppManager.js` | 1–141 |
+| CRITICAL | Credenciais reais de produção hardcoded (chave live do gateway de pagamento) | `src/utils.js` | 1–7 |
+| CRITICAL | Algoritmo de hash falso (`badCrypto`) — base64 truncado não é hash | `src/utils.js` | 17–23 |
+| HIGH | Toda a lógica do checkout (50+ linhas) dentro de um route handler | `src/AppManager.js` | 28–78 |
+| HIGH | Callback Hell — 5 níveis de aninhamento assíncrono | `src/AppManager.js` | 37–77 |
+| HIGH | Deleção de usuário sem integridade referencial — matrículas ficam órfãs | `src/AppManager.js` | 131–136 |
+| MEDIUM | N+1 Queries no relatório financeiro (curso → matrículas → usuário → pagamento) | `src/AppManager.js` | 80–129 |
+| MEDIUM | Estado global mutável (`globalCache`, `totalRevenue`) sem controle | `src/utils.js` | 9–10 |
+| MEDIUM | Número de cartão logado no console durante processamento | `src/AppManager.js` | 45 |
+| LOW | Nomes de variáveis sem semântica (`u`, `e`, `p`, `cid`, `cc`) | `src/AppManager.js` | 29–33 |
+| LOW | Ausência de error handling no DELETE de usuário (err ignorado) | `src/AppManager.js` | 131–136 |
+
+**Por que esses problemas são relevantes:** A chave `pk_live_` do gateway de pagamento exposta representa risco financeiro direto. O hash falso torna todas as senhas trivialmente reversíveis. A God Class impossibilita qualquer teste unitário.
+
+---
+
+### Projeto 3 — `task-manager-api` (Python/Flask — Task Manager)
+
+| Severidade | Anti-Pattern | Arquivo | Linha(s) |
+|---|---|---|---|
+| CRITICAL | `SECRET_KEY` hardcoded | `app.py` | 13 |
+| HIGH | Lógica de negócio nas routes — validações complexas e montagem de resposta | `routes/task_routes.py` | 11–299 |
+| HIGH | API deprecated: `Model.query.get()` (removida no SQLAlchemy 2.1) | `routes/task_routes.py` | 42, 67, 117, 158, 188, 227 |
+| HIGH | Lógica de `overdue` duplicada em 3 funções diferentes | `routes/task_routes.py` | 30–38, 71–80, 283–287 |
+| MEDIUM | Camada `services/` existe mas não é usada pelas routes | `services/notification_service.py` | — |
+| MEDIUM | Imports não utilizados (`json`, `os`, `sys`, `time`) | `routes/task_routes.py` | 7 |
+| MEDIUM | Bare `except:` silenciando erros sem logging | `routes/task_routes.py` | 62–63, 236–238 |
+| LOW | `print()` para logging em vez de logger estruturado | `routes/task_routes.py` | 149, 153, 219, 234 |
+| LOW | `type(tags) == list` em vez de `isinstance(tags, list)` | `routes/task_routes.py` | 141, 210 |
+| LOW | Ausência de módulo de configuração centralizado | `app.py` | 11–13 |
+
+**Por que esses problemas são relevantes:** Apesar de ter organização parcial, o projeto viola MVC ao colocar lógica de negócio nas routes. A API deprecated quebrará em futuras atualizações do SQLAlchemy. O `SECRET_KEY` hardcoded é um risco crítico de segurança mesmo em projetos "parcialmente organizados".
+
+---
+
+## Construção da Skill
+
+### Estrutura da Skill
+
+```
+.claude/skills/refactor-arch/
+├── SKILL.md                    ← Instruções das 3 fases sequenciais
+├── 01-project-analysis.md      ← Heurísticas de detecção de stack e arquitetura
+├── 02-antipatterns-catalog.md  ← 16 anti-patterns + 4 deprecated APIs com sinais de detecção
+├── 03-report-template.md       ← Template padronizado do relatório de auditoria
+├── 04-mvc-guidelines.md        ← Regras MVC: responsabilidades por camada + exemplos
+└── 05-refactoring-playbook.md  ← 11 padrões de transformação com código antes/depois
+```
+
+### Decisões de Design
+
+**SKILL.md como orquestrador, arquivos de referência como conhecimento:**  
+O `SKILL.md` age como um prompt de sistema estruturado que instrui o agente a executar 3 fases em sequência, com pontos de parada explícitos. Os arquivos de referência fornecem o conhecimento de domínio necessário para cada fase, sem misturá-los no arquivo principal — isso mantém o SKILL.md legível e os arquivos de referência focados.
+
+**Por que 16 anti-patterns + 4 deprecated APIs:**  
+O catálogo foi construído bottom-up: primeiro identifiquei os problemas reais nos 3 projetos, depois generalizei os sinais de detecção. Isso garante que o catálogo detecte problemas reais, não apenas teóricos. A inclusão de deprecated APIs (`Model.query.get()`, `crypto.createCipher()`) resolve um problema específico do Projeto 3 que seria fácil de perder.
+
+**Por que separar guidelines de MVC e o playbook:**  
+As guidelines (`04`) descrevem o *destino* (o que cada camada deve e não deve fazer), enquanto o playbook (`05`) descreve as *transformações* (como sair do estado atual para o estado alvo). Separar os dois permite que o agente consulte as guidelines para decisões de estrutura e o playbook para implementação concreta.
+
+**Como garantiu agnóstica de tecnologia:**
+- O catálogo de anti-patterns tem seções por linguagem (Python e Node.js) com sinais de detecção específicos para cada uma
+- O `01-project-analysis.md` tem tabelas de mapeamento para múltiplas linguagens e frameworks
+- As guidelines (`04`) têm exemplos de estrutura MVC para Python/Flask e Node.js/Express
+- O playbook (`05`) tem exemplos de transformação em ambas as linguagens para cada padrão
+- A Fase 1 detecta a stack antes de qualquer análise, permitindo que as fases seguintes adaptem a abordagem
+
+**Desafios encontrados:**
+- **Callback Hell vs. Async/Await (Node.js):** O projeto usa sqlite3 com callbacks, mas a refatoração ideal usa Promises/async-await. O playbook inclui a transformação completa (PB-05) para não deixar ambiguidade.
+- **Projeto 3 parcialmente organizado:** A skill precisa ser útil mesmo quando a estrutura já existe parcialmente. A solução foi fazer a Fase 1 mapear explicitamente o que está certo e o que falta, para a Fase 3 complementar sem destruir o que já está bem.
+- **Pausa obrigatória na Fase 2:** A instrução de pausa está em destaque visual no SKILL.md (bloco `⚠️`) e no output da Fase 2, para que o agente não a ignore ao executar sequencialmente.
+
+---
+
+## Resultados
+
+> **Nota:** Esta seção será preenchida após a execução da skill nos 3 projetos.
+
+### Resumo dos Relatórios de Auditoria (a preencher)
+
+| Projeto | CRITICAL | HIGH | MEDIUM | LOW | Total |
+|---|---|---|---|---|---|
+| `code-smells-project` | — | — | — | — | — |
+| `ecommerce-api-legacy` | — | — | — | — | — |
+| `task-manager-api` | — | — | — | — | — |
+
+### Estrutura Antes/Depois (a preencher)
+
+Os relatórios gerados pela skill serão salvos em:
+- [`code-smells-project/reports/audit-project-1.md`](code-smells-project/reports/audit-project-1.md)
+- [`ecommerce-api-legacy/reports/audit-project-2.md`](ecommerce-api-legacy/reports/audit-project-2.md)
+- [`task-manager-api/reports/audit-project-3.md`](task-manager-api/reports/audit-project-3.md)
+
+### Checklist de Validação — Projeto 1 (`code-smells-project`)
+
+#### Fase 1 — Análise
+- [ ] Linguagem detectada corretamente (Python)
+- [ ] Framework detectado corretamente (Flask)
+- [ ] Domínio da aplicação descrito corretamente (E-commerce API)
+- [ ] Número de arquivos analisados condiz com a realidade (4 arquivos)
+
+#### Fase 2 — Auditoria
+- [ ] Relatório segue o template definido nos arquivos de referência
+- [ ] Cada finding tem arquivo e linhas exatos
+- [ ] Findings ordenados por severidade (CRITICAL → LOW)
+- [ ] Mínimo de 5 findings identificados
+- [ ] Detecção de APIs deprecated incluída (se aplicável)
+- [ ] Skill pausa e pede confirmação antes da Fase 3
+
+#### Fase 3 — Refatoração
+- [ ] Estrutura de diretórios segue padrão MVC
+- [ ] Configuração extraída para módulo de config (sem hardcoded)
+- [ ] Models criados para abstrair dados
+- [ ] Views/Routes separadas para visualização ou roteamento
+- [ ] Controllers concentram o fluxo da aplicação
+- [ ] Error handling centralizado
+- [ ] Entry point claro
+- [ ] Aplicação inicia sem erros
+- [ ] Endpoints originais respondem corretamente
+
+---
+
+### Checklist de Validação — Projeto 2 (`ecommerce-api-legacy`)
+
+#### Fase 1 — Análise
+- [ ] Linguagem detectada corretamente (Node.js / JavaScript)
+- [ ] Framework detectado corretamente (Express)
+- [ ] Domínio da aplicação descrito corretamente (LMS com checkout)
+- [ ] Número de arquivos analisados condiz com a realidade (3 arquivos em src/)
+
+#### Fase 2 — Auditoria
+- [ ] Relatório segue o template definido nos arquivos de referência
+- [ ] Cada finding tem arquivo e linhas exatos
+- [ ] Findings ordenados por severidade (CRITICAL → LOW)
+- [ ] Mínimo de 5 findings identificados
+- [ ] Detecção de APIs deprecated incluída (se aplicável)
+- [ ] Skill pausa e pede confirmação antes da Fase 3
+
+#### Fase 3 — Refatoração
+- [ ] Estrutura de diretórios segue padrão MVC
+- [ ] Configuração extraída para módulo de config (sem hardcoded)
+- [ ] Models criados para abstrair dados
+- [ ] Views/Routes separadas para visualização ou roteamento
+- [ ] Controllers concentram o fluxo da aplicação
+- [ ] Error handling centralizado
+- [ ] Entry point claro
+- [ ] Aplicação inicia sem erros
+- [ ] Endpoints originais respondem corretamente
+
+---
+
+### Checklist de Validação — Projeto 3 (`task-manager-api`)
+
+#### Fase 1 — Análise
+- [ ] Linguagem detectada corretamente (Python)
+- [ ] Framework detectado corretamente (Flask + SQLAlchemy)
+- [ ] Domínio da aplicação descrito corretamente (Task Manager API)
+- [ ] Número de arquivos analisados condiz com a realidade (~15 arquivos em múltiplos diretórios)
+
+#### Fase 2 — Auditoria
+- [ ] Relatório segue o template definido nos arquivos de referência
+- [ ] Cada finding tem arquivo e linhas exatos
+- [ ] Findings ordenados por severidade (CRITICAL → LOW)
+- [ ] Mínimo de 5 findings identificados
+- [ ] Detecção de APIs deprecated incluída (`Model.query.get()` do SQLAlchemy)
+- [ ] Skill pausa e pede confirmação antes da Fase 3
+
+#### Fase 3 — Refatoração
+- [ ] Estrutura de diretórios segue padrão MVC
+- [ ] Configuração extraída para módulo de config (sem hardcoded)
+- [ ] Models criados para abstrair dados
+- [ ] Views/Routes separadas para visualização ou roteamento
+- [ ] Controllers concentram o fluxo da aplicação
+- [ ] Error handling centralizado
+- [ ] Entry point claro
+- [ ] Aplicação inicia sem erros
+- [ ] Endpoints originais respondem corretamente
+
+---
+
+## Como Executar
+
+### Pré-requisitos
+
+- **Claude Code** instalado e configurado (`claude` disponível no PATH)
+- Python 3.x instalado (para projetos 1 e 3)
+- Node.js 18+ instalado (para o projeto 2)
+- Dependências de cada projeto instaladas (ver abaixo)
+
+### Instalação das dependências
+
+```bash
+# Projeto 1 — Python/Flask
+cd code-smells-project
+pip install -r requirements.txt
+
+# Projeto 2 — Node.js/Express
+cd ecommerce-api-legacy
+npm install
+
+# Projeto 3 — Python/Flask + SQLAlchemy
+cd task-manager-api
+pip install -r requirements.txt
+```
+
+### Execução da Skill
+
+```bash
+# Projeto 1 — code-smells-project
+cd code-smells-project
+claude "/refactor-arch"
+
+# Projeto 2 — ecommerce-api-legacy
+cd ../ecommerce-api-legacy
+claude "/refactor-arch"
+
+# Projeto 3 — task-manager-api
+cd ../task-manager-api
+claude "/refactor-arch"
+```
+
+> **Nota:** A skill pausará ao final da Fase 2 e aguardará confirmação (`y`) antes de iniciar a refatoração. Revise o relatório de auditoria antes de confirmar.
+
+### Como validar que a refatoração funcionou
+
+**Projeto 1 (Python/Flask):**
+```bash
+cd code-smells-project
+python app.py
+# Em outro terminal:
+curl http://localhost:5000/health
+curl http://localhost:5000/produtos
+curl http://localhost:5000/usuarios
+curl -X POST http://localhost:5000/login -H "Content-Type: application/json" -d '{"email":"test@test.com","senha":"123"}'
+```
+
+**Projeto 2 (Node.js/Express):**
+```bash
+cd ecommerce-api-legacy
+node src/app.js
+# Em outro terminal:
+curl http://localhost:3000/api/admin/financial-report
+```
+
+**Projeto 3 (Python/Flask):**
+```bash
+cd task-manager-api
+python app.py
+# Em outro terminal:
+curl http://localhost:5000/health
+curl http://localhost:5000/tasks
+curl http://localhost:5000/tasks/stats
+```
+
+### Estrutura dos relatórios gerados
+
+Após executar a skill em cada projeto, os relatórios de auditoria (output da Fase 2) são salvos automaticamente em:
+
+```
+code-smells-project/reports/audit-project-1.md
+ecommerce-api-legacy/reports/audit-project-2.md
+task-manager-api/reports/audit-project-3.md
+```
+
+---
+
+## Estrutura do Repositório
+
+```
+mba-ia-refactor-projects-skill/
+├── README.md
+├── code-smells-project/                       # Projeto 1 — Python/Flask (E-commerce API)
+│   ├── .claude/
+│   │   └── skills/
+│   │       └── refactor-arch/                 # ← SKILL AQUI
+│   │           ├── SKILL.md
+│   │           ├── 01-project-analysis.md
+│   │           ├── 02-antipatterns-catalog.md
+│   │           ├── 03-report-template.md
+│   │           ├── 04-mvc-guidelines.md
+│   │           └── 05-refactoring-playbook.md
+│   ├── reports/
+│   │   └── audit-project-1.md                 # (gerado pela skill)
+│   ├── app.py
+│   ├── controllers.py
+│   ├── models.py
+│   ├── database.py
+│   └── requirements.txt
+│
+├── ecommerce-api-legacy/                      # Projeto 2 — Node.js/Express (LMS API)
+│   ├── .claude/
+│   │   └── skills/
+│   │       └── refactor-arch/                 # ← CÓPIA DA SKILL
+│   │           └── ...
+│   ├── reports/
+│   │   └── audit-project-2.md                 # (gerado pela skill)
+│   ├── src/
+│   │   ├── app.js
+│   │   ├── AppManager.js
+│   │   └── utils.js
+│   └── package.json
+│
+└── task-manager-api/                          # Projeto 3 — Python/Flask (Task Manager)
+    ├── .claude/
+    │   └── skills/
+    │       └── refactor-arch/                 # ← CÓPIA DA SKILL
+    │           └── ...
+    ├── reports/
+    │   └── audit-project-3.md                 # (gerado pela skill)
+    ├── app.py
+    ├── database.py
+    ├── models/
+    ├── routes/
+    ├── services/
+    └── utils/
+```
+
+---
+
 # Criação de Skills — Refatoração Arquitetural Automatizada
 
 Ao longo do curso você aprendeu o que são Skills e como elas permitem que um agente de IA atue como um especialista em tarefas específicas. Agora imagine o seguinte cenário: você herdou 3 projetos legados com problemas de arquitetura, segurança e qualidade de código. Revisar e corrigir tudo manualmente levaria dias.
