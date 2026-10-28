@@ -643,6 +643,331 @@ Pendências que precisam da sua decisão
 **Por que esses problemas são relevantes:** A chave `pk_live_` do gateway de pagamento exposta representa risco financeiro direto. O hash falso torna todas as senhas trivialmente reversíveis. A God Class impossibilita qualquer teste unitário.
 
 ---
+#### Resultado da execução da Skill
+
+================================
+PHASE 1: PROJECT ANALYSIS
+================================
+Language:      Node.js (versão não especificada)
+Framework:     Express ^4.18.2
+Dependencies:  express, sqlite3 ^5.1.6
+Domain:        LMS API (com fluxo de checkout) para matrículas, pagamentos e relatório financeiro de cursos
+Architecture:  Monolítica sem camadas — AppManager.js concentra schema/seed, rotas, regras de negócio e SQL; utils.js mistura config, cache global e "crypto"
+Source files:  3 files analyzed
+DB:            SQLite em memória (`:memory:`), SQL raw via callbacks, sem migrations
+================================
+
+================================
+ARCHITECTURE AUDIT REPORT
+================================
+Project: ecommerce-api-legacy
+Stack:   Node.js + Express
+Files:   3 analyzed | ~180 lines of code
+Date:    2026-10-27
+
+## Summary
+
+CRITICAL: 2 | HIGH: 4 | MEDIUM: 5 | LOW: 4
+Total findings: 15
+
+## Findings
+
+### [CRITICAL] Hardcoded Credentials / Secrets
+File: src/utils.js:1-7
+Anti-pattern: AP-02 — Hardcoded Credentials / Secrets
+Description: O objeto `config` contém credenciais literais versionadas no código:
+  dbPass: "senha_super_secreta_prod_123"
+  paymentGatewayKey: "pk_live_1234567890abcdef"
+  dbUser: "admin_master", smtpUser: "no-reply@fullcycle.com.br"
+Impact: Qualquer pessoa com acesso ao repositório obtém a chave live do gateway de pagamento e a senha do banco; rotação exige novo deploy.
+Recommendation: Mover para variáveis de ambiente lidas em `config/settings.js` (com `.env.example`), sem valores sensíveis no código; remover chaves não utilizadas (db
+User, dbPass, smtpUser).
+
+---
+
+### [CRITICAL] Senha com Hash Inseguro / Senha Padrão
+File: src/utils.js:17-23 (usado em src/AppManager.js:68; seed em src/AppManager.js:18)
+Anti-pattern: AP-04 — Senha em Texto Puro / Hash Inseguro
+Description: `badCrypto` é um pseudo-hash: concatena 10.000 vezes os 2 primeiros caracteres do base64 da senha e devolve `substring(0, 10)`. Isso é determinístico, sem
+ salt, e na prática revela os 2 primeiros caracteres repetidos (colisões massivas entre senhas distintas). Além disso, `badCrypto(p || "123456")` atribui uma senha pad
+rão previsível quando `pwd` não é enviado, e o seed insere `pass = '123'` em texto puro (linha 18). O loop de 10.000 iterações também bloqueia o event loop a cada novo
+ usuário.
+Impact: Senhas de usuários são triviais de quebrar/colidir; contas criadas sem senha ficam com "123456".
+Recommendation: Usar hash com salt (`crypto.scrypt`/`bcrypt`) em um serviço de senha; exigir `pwd` ou gerar token aleatório; fazer hash também do seed.
+
+---
+
+### [HIGH] God Class / God File
+File: src/AppManager.js:4-139
+Anti-pattern: AP-05 — God Class / God File
+Description: `AppManager` acumula criação de conexão, DDL e seed (`initDb`), registro de rotas HTTP (`setupRoutes`), regras de negócio de checkout, simulação de gatewa
+y de pagamento, geração de relatório e acesso a dados.
+Impact: Impossível testar ou evoluir qualquer parte isoladamente; toda mudança toca o mesmo arquivo.
+Recommendation: Separar em `config/`, `models/` (User, Course, Enrollment, Payment, AuditLog), `controllers/`, `routes/` e `middlewares/`.
+
+---
+
+### [HIGH] Lógica de Negócio em Route Handler
+File: src/AppManager.js:28-78, 80-129, 131-137
+Anti-pattern: AP-06 — Lógica de Negócio em Route Handler
+Description: O handler de `POST /api/checkout` (~50 linhas) valida entrada, consulta curso e usuário, cria usuário, decide aprovação do cartão (`cc.startsWith("4")`),
+grava matrícula, pagamento e auditoria e atualiza cache, com callbacks aninhados em 5 níveis. `GET /api/admin/financial-report` calcula receita e monta o relatório den
+tro da rota, e `DELETE /api/users/:id` executa SQL direto.
+Impact: Regras de negócio acopladas ao HTTP e ao SQL; "callback hell" dificulta manutenção e o tratamento correto de erros.
+Recommendation: Criar `CheckoutController`/`ReportController` (ou services) chamando models com Promises/async-await; rotas apenas mapeiam URL → controller.
+
+---
+
+### [HIGH] Informações Sensíveis em Log
+File: src/AppManager.js:45
+Anti-pattern: AP-08 — Debug/Informações Sensíveis no Response ou logs
+Description: `console.log(\`Processando cartão ${cc} na chave ${config.paymentGatewayKey}\`)` escreve o número completo do cartão e a chave live do gateway nos logs.
+Impact: Violação de PCI-DSS; vazamento de dados de cartão e da chave em qualquer agregador de logs.
+Recommendation: Não logar PAN nem chaves; no máximo logar os últimos 4 dígitos mascarados via logger estruturado.
+
+---
+
+### [HIGH] Endpoints Administrativos/Destrutivos sem Autenticação
+File: src/AppManager.js:80, 131
+Anti-pattern: Fora do catálogo (mais próximo de AP-08 — exposição de informação sensível)
+Description: `GET /api/admin/financial-report` (nomes de alunos e receita) e `DELETE /api/users/:id` não têm nenhuma verificação de identidade/autorização.
+Impact: Qualquer cliente anônimo lê dados financeiros e apaga usuários.
+Recommendation: Adicionar middleware de autenticação/autorização para rotas admin. Obs.: isso altera o contrato das rotas; será tratado na Fase 3 apenas como middlewar
+e opt-in (via variável de ambiente) para preservar os contratos existentes.
+
+---
+
+### [MEDIUM] N+1 Query Problem
+File: src/AppManager.js:83-126
+Anti-pattern: AP-09 — N+1 Query Problem
+Description: Para cada curso roda uma query de matrículas; para cada matrícula, uma de usuário e uma de pagamento (3 níveis de queries em loop). A ordem do relatório t
+ambém fica não determinística (`report.push` na ordem em que os callbacks terminam).
+Impact: Número de queries cresce com cursos × matrículas; latência alta e ordem instável.
+Recommendation: Uma única query com JOIN (courses ⟕ enrollments ⟕ users ⟕ payments) e agregação em memória, com `ORDER BY`.
+
+---
+
+### [MEDIUM] Ausência de Validação de Entrada
+File: src/AppManager.js:29-35, 131-133
+Anti-pattern: AP-11 — Ausência de Validação de Entrada
+Description: Checkout só testa presença (`!u || !e || !cid || !cc`); não valida formato de e-mail, tipo de `c_id` ou formato do cartão. `req.body` indefinido gera exce
+ção se o JSON for inválido; `:id` do DELETE é usado sem validação.
+Impact: Dados inválidos persistidos; erros 500 evitáveis.
+Recommendation: Criar validadores (`validators/`) para checkout e id numérico, retornando 400 com mensagem clara.
+
+---
+
+### [MEDIUM] Exceções/Erros Ignorados
+File: src/AppManager.js:57-61, 92-94, 104-106, 133-135
+Anti-pattern: AP-12 — Bare Except / Swallowed Exceptions
+Description: O `err` do INSERT de `audit_logs` (57) é ignorado; em 92 `enrollments` é usado sem checar `err` (TypeError se a query falhar); em 104/106 os erros de user
+/payment são descartados; o DELETE (133) responde sucesso mesmo com `err`.
+Impact: Falhas silenciosas, respostas de sucesso incorretas e possível crash do processo.
+Recommendation: Tratar todos os erros, propagar para um middleware de error handling central e logar.
+
+---
+
+### [MEDIUM] Estado Global Mutável
+File: src/utils.js:9-15, 25
+Anti-pattern: AP-10 — Estado Global Mutável
+Description: `globalCache` é um objeto de módulo escrito por `logAndCache` a cada checkout (nunca lido, nunca expira); `totalRevenue` é variável global exportada e não
+ usada.
+Impact: Vazamento de memória crescente e estado compartilhado entre requisições.
+Recommendation: Remover o cache morto ou encapsular em um módulo de cache com TTL/limite; remover `totalRevenue`.
+
+---
+
+### [MEDIUM] Integridade Referencial: Delete sem Cascata
+File: src/AppManager.js:131-137
+Anti-pattern: Fora do catálogo (mais próximo de AP-06 — acesso direto a banco em handler)
+Description: `DELETE /api/users/:id` apaga só o usuário; a própria mensagem admite: "as matrículas e pagamentos ficaram sujos no banco". Não há FKs no DDL (linhas 12-1
+6).
+Impact: Matrículas/pagamentos órfãos distorcem o relatório financeiro (aluno aparece como "Unknown").
+Recommendation: Apagar pagamentos e matrículas do usuário em transação (ou habilitar FKs com `ON DELETE CASCADE`), mantendo a resposta HTTP.
+
+---
+
+### [LOW] console.log para Logging
+File: src/app.js:13; src/AppManager.js:45; src/utils.js:13
+Anti-pattern: AP-13 — Print / Console.log para Logging
+Description: Logs ad-hoc via `console.log` em entry point, handler e utilitário.
+Impact: Sem níveis, sem estrutura; mistura log com dados sensíveis.
+Recommendation: Usar um módulo logger único (`config/logger.js`) com níveis.
+
+---
+
+### [LOW] Magic Numbers / Magic Strings
+File: src/AppManager.js:46, 48, 108; src/utils.js:19-22
+Anti-pattern: AP-14 — Magic Numbers / Magic Strings
+Description: Status `'PAID'`/`'DENIED'` literais em vários pontos, regra `cc.startsWith("4")`, `10000` iterações, `substring(0, 2)`/`(0, 10)`.
+Impact: Typos silenciosos e regras difíceis de localizar.
+Recommendation: Constantes nomeadas (`PAYMENT_STATUS`, `APPROVED_CARD_PREFIX`).
+
+---
+
+### [LOW] Nomes de Variáveis Sem Semântica
+File: src/AppManager.js:29-33, 90, 102
+Anti-pattern: AP-15 — Nomes de Variáveis Sem Semântica
+Description: `u`, `e`, `p`, `cid`, `cc`, `c`, `enr` e campos do payload `usr`, `eml`, `pwd`, `c_id`.
+Impact: Leitura difícil. Os nomes do payload fazem parte do contrato e serão mantidos na API, mapeados para nomes claros internamente.
+Recommendation: Renomear variáveis internas (`name`, `email`, `password`, `courseId`, `cardNumber`).
+
+---
+
+### [LOW] Imports/Exports Não Utilizados
+File: src/AppManager.js:2; src/utils.js:2-5, 25
+Anti-pattern: AP-16 — Imports Não Utilizados
+Description: `totalRevenue` é importado em AppManager mas nunca usado; `globalCache`, `totalRevenue` e as chaves `dbUser`, `dbPass`, `smtpUser` do config nunca são con
+sumidos.
+Impact: Ruído e superfície de configuração morta.
+Recommendation: Remover.
+
+================================
+Total: 15 findings
+sumidos.
+Impact: Ruído e superfície de configuração morta.
+Recommendation: Remover.
+
+================================
+Total: 15 findings
+CRITICAL: 2 | HIGH: 4 | MEDIUM: 5 | LOW: 4
+================================
+
+Deprecated APIs: nenhuma encontrada (sem `crypto.createCipher`, sem `res.send(status, body)`).
+
+Phase 2 complete. Proceed with refactoring (Phase 3)? [y/n]
+
+---
+
+================================
+PHASE 1: PROJECT ANALYSIS
+
+Language:      Node.js (versão não especificada)
+Framework:     Express ^4.18.2
+Dependencies:  express, sqlite3 ^5.1.6
+Domain:        LMS API (com fluxo de checkout) para matrículas, pagamentos e relatório financeiro de cursos
+Architecture:  Monolítica sem camadas. AppManager.js concentra schema/seed, rotas, regras de negócio e SQL. utils.js mistura config, cache global e "crypto".
+Source files:  3 files analyzed
+DB:            SQLite em memória, SQL raw via callbacks, sem migrations
+
+PHASE 2: ARCHITECTURE AUDIT (resumo)
+
+Project: ecommerce-api-legacy, Node.js + Express, 3 arquivos, ~180 LOC.
+
+CRITICAL: 2 | HIGH: 4 | MEDIUM: 5 | LOW: 4 | Total: 15
+
+┌─────┬──────────┬───────────────────────────────────────────────────────────────────────────┬──────────────────────────────────────────┐
+│  #  │   Sev    │                               Anti-pattern                                │                  Local                   │
+├─────┼──────────┼───────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ 1   │ CRITICAL │ AP-02 Hardcoded secrets (pk_live_..., dbPass)                             │ utils.js:1-7                             │
+├─────┼──────────┼───────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ 2   │ CRITICAL │ AP-04 Hash inseguro (badCrypto), senha padrão 123456, seed em texto puro  │ utils.js:17-23, AppManager.js:18,68      │
+├─────┼──────────┼───────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ 3   │ HIGH     │ AP-05 God Class (AppManager)                                              │ AppManager.js:4-139                      │
+├─────┼──────────┼───────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ 4   │ HIGH     │ AP-06 Lógica de negócio e SQL em route handlers (callbacks em 5 níveis)   │ AppManager.js:28-137                     │
+├─────┼──────────┼───────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ 5   │ HIGH     │ AP-08 Log do cartão completo e da chave live                              │ AppManager.js:45                         │
+├─────┼──────────┼───────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ 6   │ HIGH     │ Admin report e DELETE sem autenticação (fora do catálogo)                 │ AppManager.js:80,131                     │
+├─────┼──────────┼───────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ 7   │ MEDIUM   │ AP-09 N+1 no relatório financeiro (ordem não determinística)              │ AppManager.js:83-126                     │
+├─────┼──────────┼───────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ 8   │ MEDIUM   │ AP-11 Sem validação de entrada                                            │ AppManager.js:29-35,131-133              │
+├─────┼──────────┼───────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ 9   │ MEDIUM   │ AP-12 Erros ignorados (err descartado, possível TypeError)                │ AppManager.js:57,92,104,106,133          │
+├─────┼──────────┼───────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ 10  │ MEDIUM   │ AP-10 Estado global mutável (globalCache, totalRevenue)                   │ utils.js:9-15,25                         │
+├─────┼──────────┼───────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ 11  │ MEDIUM   │ DELETE de usuário deixa matrículas e pagamentos órfãos (fora do catálogo) │ AppManager.js:131-137                    │
+├─────┼──────────┼───────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ 12  │ LOW      │ AP-13 console.log como logging                                            │ app.js:13, AppManager.js:45, utils.js:13 │
+├─────┼──────────┼───────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ 13  │ LOW      │ AP-14 Magic strings e números ('PAID', startsWith("4"), 10000)            │ AppManager.js:46,48,108, utils.js:19-22  │
+├─────┼──────────┼───────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ 14  │ LOW      │ AP-15 Nomes sem semântica (u, e, p, cid, cc)                              │ AppManager.js:29-33,90,102               │
+├─────┼──────────┼───────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ 15  │ LOW      │ AP-16 Imports e exports não usados                                        │ AppManager.js:2, utils.js:2-5,25         │
+└─────┴──────────┴───────────────────────────────────────────────────────────────────────────┴──────────────────────────────────────────┘
+
+Deprecated APIs: nenhuma encontrada.
+
+O relatório completo, com descrição, impacto e recomendação de cada finding, está em reports/audit-project-3.md. Inferi o N=3 pelo PLAN_PROJECT_3.md.
+
+Duas observações sobre a Fase 3:
+- Vou preservar os contratos dos endpoints, incluindo os nomes do payload (usr, eml, pwd, c_id, card) e as mensagens de resposta.
+- Para o finding 6, a autenticação alteraria o contrato das rotas. Pretendo adicioná-la como middleware opt-in, ativado por variável de ambiente.
+
+================================
+PHASE 2 COMPLETE
+
+Relatório salvo em: reports/audit-project-3.md
+Total de findings: 15
+
+Phase 3 vai reestruturar o projeto para o padrão MVC.
+Todos os arquivos originais serão modificados ou movidos.
+
+Proceed with refactoring (Phase 3)? [y/n]
+
+---
+
+================================
+PHASE 3: REFACTORING COMPLETE
+
+New Project Structure
+
+src/
+├── app.js                      entry point (~25 linhas)
+├── constants.js                PAYMENT_STATUS, prefixo de cartão aprovado
+├── config/settings.js          lê process.env, sem segredos no código
+├── database/
+│   ├── connection.js           sqlite com helpers run/get/all em Promise
+│   └── init.js                 schema + seed (senha do seed com hash)
+├── models/                     user, course, enrollment, payment, auditLog (SQL parametrizado)
+├── controllers/                checkout, report, user (regras de negócio)
+├── routes/                     checkout, admin, user + index (apenas HTTP)
+├── middlewares/                errorHandler, adminAuth (opt-in)
+├── services/                   passwordService (scrypt + salt), paymentService
+├── validators/checkoutValidator.js
+└── utils/                      logger, AppError
+.env.example
+Removidos: AppManager.js e utils.js.
+
+Issues Resolved
+
+- ✓ AP-02 Segredos hardcoded: agora vêm de process.env, e .env.example foi criado.
+- ✓ AP-04 Hash inseguro: badCrypto foi trocado por scrypt com salt. A senha padrão 123456 virou senha aleatória, e o seed também recebe hash.
+- ✓ AP-05 God Class: dividida em camadas MVC.
+- ✓ AP-06 Lógica nas rotas: rotas finas, regras nos controllers e SQL nos models. Os callbacks viraram async/await.
+- ✓ AP-08 Log sensível: o cartão aparece só como ****4444 e a chave não é mais logada.
+- ✓ Endpoints admin sem auth: middleware opt-in, ativo quando ADMIN_TOKEN está definido.
+- ✓ AP-09 N+1: o relatório usa uma query com JOIN, com ordem determinística.
+- ✓ AP-10 Estado global: o cache morto e o totalRevenue foram removidos.
+- ✓ AP-11 Validação: validator para checkout (e-mail, c_id inteiro, tipos) e para o :id do DELETE.
+- ✓ AP-12 Erros ignorados: todos propagam para o errorHandler central.
+- ✓ DELETE de usuário agora remove também matrículas e pagamentos.
+- ✓ AP-13/14/15/16: logger único, constantes nomeadas, nomes semânticos e imports mortos removidos.
+
+Validation
+
+- ✓ A aplicação sobe sem erros (testada na porta 3055).
+- ✓ Todos os endpoints responderam:
+  - Checkout aprovado: 200 {msg, enrollment_id}.
+  - Cartão recusado: 400 "Pagamento recusado".
+  - Campos ausentes: 400 "Bad Request".
+  - Curso inexistente: 404 "Curso não encontrado".
+  - Relatório financeiro: 200 com o mesmo formato.
+  - DELETE: 200, e o relatório depois dele não tem mais registros órfãos.
+- ✓ Nenhum finding CRITICAL ou HIGH permanece. Busca por pk_live e senha_super em src/ não encontrou nada.
+
+Mudanças de comportamento a conhecer:
+- Mensagem do DELETE: mudou para "Usuário deletado junto com suas matrículas e pagamentos." O texto antigo dizia que os registros ficavam sujos, o que deixou de ser verdade. O status continua 200.
+- ADMIN_TOKEN: sem ele definido, as rotas admin continuam abertas, como antes. Com ele definido, exigem o header x-admin-token.
+- PAYMENT_GATEWAY_KEY: o novo settings.js a lê, mas o paymentService simulado ainda não a usa.
+- Não testei: o caminho 401 do adminAuth e a rota de checkout com um e-mail já existente.
+- Não commitei nada: as mudanças e o reports/audit-project-3.md estão só na árvore de trabalho.
+
+---
 
 ### Projeto 3 — `task-manager-api` (Python/Flask — Task Manager)
 

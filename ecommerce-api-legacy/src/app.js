@@ -1,14 +1,24 @@
 const express = require('express');
-const AppManager = require('./AppManager');
-const { config } = require('./utils');
+const settings = require('./config/settings');
+const initDb = require('./database/init');
+const routes = require('./routes');
+const errorHandler = require('./middlewares/errorHandler');
+const logger = require('./utils/logger');
 
-const app = express();
-app.use(express.json());
+async function start() {
+    await initDb();
 
-const manager = new AppManager();
-manager.initDb();
-manager.setupRoutes(app);
+    const app = express();
+    app.use(express.json());
+    app.use(routes);
+    app.use(errorHandler);
 
-app.listen(config.port, () => {
-    console.log(`Frankenstein LMS rodando na porta ${config.port}...`);
+    app.listen(settings.port, () => {
+        logger.info(`Frankenstein LMS rodando na porta ${settings.port}...`);
+    });
+}
+
+start().catch((err) => {
+    logger.error('Falha ao iniciar a aplicação', err);
+    process.exit(1);
 });
