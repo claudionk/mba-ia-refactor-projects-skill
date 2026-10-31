@@ -65,6 +65,23 @@ cursor.execute("SELECT * FROM usuarios WHERE email = '" + email + "'")
 
 ---
 
+### AP-17 · Endpoint Sensível sem Autenticação / Autenticação Fail-Open
+**Severidade:** HIGH (CRITICAL se o endpoint apaga dados em massa ou executa comandos)  
+**Sinais de detecção:**
+- Rota administrativa, financeira ou destrutiva (`/admin/*`, `DELETE`, relatórios com dados pessoais ou receita) sem middleware/decorator de autenticação
+- Middleware de autenticação **fail-open**: libera a requisição quando a credencial esperada não está configurada
+  - Node.js: `if (!settings.adminToken) return next();`
+  - Python: `if not token_esperado: return view(*args, **kwargs)`
+- `.env.example` com a variável de credencial vazia (`ADMIN_TOKEN=`), o que faz o projeto subir com a proteção desligada
+- Comparação de token com `===` / `==` em vez de comparação em tempo constante
+- Autorização baseada em campo enviado pelo cliente (`role: 'admin'` no body)
+
+**Verificar em:** `middlewares/`, `routes/`, decorators de rota, `.env.example`, `config/settings`.
+
+**Regra:** um middleware que só protege "quando configurado" **não corrige** este anti-pattern; ele continua aberto na configuração padrão e deve ser reportado como finding.
+
+---
+
 ## Anti-Patterns — Arquitetura (HIGH)
 
 ### AP-05 · God Class / God File

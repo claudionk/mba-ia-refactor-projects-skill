@@ -154,7 +154,7 @@ Para cada domínio identificado no God File (ex: Produto, Usuário, Pedido):
 # models.py — 314 linhas: produto, usuário, pedido, relatório tudo junto
 def get_todos_produtos(): ...
 def criar_produto(): ...
-def login_usuario(): ...       # Autenticacao aqui?
+def login_usuario(): ...       # autenticação aqui?
 def criar_pedido(): ...        # lógica de negócio aqui?
 def relatorio_vendas(): ...    # cálculo de desconto aqui?
 ```
@@ -439,7 +439,7 @@ task = db.session.get(Task, task_id)
 category = db.session.get(Category, cat_id)
 ```
 
-> **Nota:** `db.session.get()` retorna `None` se não encontrado, exatamente igual ao comportamento anterior de `query.get()`. Nenhuma mudança de lógica necessaria.
+> **Nota:** `db.session.get()` retorna `None` se não encontrado, exatamente igual ao comportamento anterior de `query.get()`. Nenhuma mudança de lógica necessária.
 
 ---
 
@@ -566,3 +566,115 @@ const logger = {
 logger.info(`Servidor iniciado na porta ${config.port}`);
 // NUNCA logar número de cartão, senha ou dados sensíveis
 ```
+
+---
+
+## PB-12 · Endpoint Sensível sem Autenticação → Middleware Deny-by-Default
+
+**Anti-pattern:** AP-17  
+**Aplica-se a:** Python/Flask, Node.js/Express — **obrigatório em todas as stacks**
+
+### Regras (valem para qualquer linguagem)
+
+1. **Negar por padrão.** Sem credencial configurada no servidor, a rota protegida responde **403** (operação desabilitada). Nunca chamar `next()` / a view nesse caso.
+2. **Credencial errada ou ausente na requisição → 401.**
+3. **Comparação em tempo constante** (`hmac.compare_digest` / `crypto.timingSafeEqual`).
+4. **`.env.example` nunca deixa a credencial vazia** — usa um placeholder explícito (`troque-por-um-token-admin-forte`).
+5. **Proibido o padrão opt-in** ("só exige token se a variável estiver definida") com a justificativa de preservar o contrato. Fechar um endpoint sensível é uma mudança de contrato necessária: documente-a, não a evite.
+
+### Python — decorator (padrão usado em `code-smells-project/middlewares/auth.py`)
+
+**Antes (aberto ou fail-open):**
+```python
+@app.route('/admin/reset-db', methods=['POST'])
+def reset_db():
+    ...
+
+def requer_admin(view):
+    @wraps(view)
+    def protegida(*args, **kwargs):
+        token_esperado = current_app.config["ADMIN_TOKEN"]
+        if not token_esperado:
+            return view(*args, **kwargs)   # fail-open!
+        ...
+```
+
+**Depois (deny-by-default):**
+```python
+import hmac
+from functools import wraps
+
+from flask import current_app, request
+
+HEADER_ADMIN = "X-Admin-Token"
+
+
+def requer_admin(view):
+    @wraps(view)
+    def protegida(*args, **kwargs):
+        token_esperado = current_app.config["ADMIN_TOKEN"]
+        if not token_esperado:
+            raise ForbiddenError("Operacao administrativa desabilitada: ADMIN_TOKEN nao configurado")
+        token = request.headers.get(HEADER_ADMIN, "")
+        if not hmac.compare_digest(token.encode(), token_esperado.encode()):
+            raise UnauthorizedError("Token administrativo invalido")
+        return view(*args, **kwargs)
+
+    return protegida
+```
+
+### Node.js — middleware Express
+
+**Antes (fail-open):**
+```js
+function adminAuth(req, res, next) {
+    if (!settings.adminToken) return next();   // sem token configurado, tudo liberado!
+    if (req.get('x-admin-token') !== settings.adminToken) return next(new AppError(401, 'Unauthorized'));
+    return next();
+}
+```
+
+**Depois (deny-by-default):**
+```js
+const crypto = require('crypto');
+
+function tokensMatch(received, expected) {
+    const a = Buffer.from(received);
+    const b = Buffer.from(expected);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function adminAuth(req, res, next) {
+    if (!settings.adminToken) {
+        return next(new AppError(403, 'Operação administrativa desabilitada: ADMIN_TOKEN não configurado'));
+    }
+    if (!tokensMatch(req.get('x-admin-token') || '', settings.adminToken)) {
+        return next(new AppError(401, 'Unauthorized'));
+    }
+    return next();
+}
+```
+
+Aplicar o middleware em **toda** rota administrativa, financeira ou destrutiva:
+```js
+router.get('/api/admin/financial-report', adminAuth, handler);
+router.delete('/api/users/:id', adminAuth, handler);
+```
+
+### `.env.example`
+
+```
+# Obrigatório para as rotas administrativas; sem ele elas respondem 403
+ADMIN_TOKEN=troque-por-um-token-admin-forte
+```
+
+### Validação obrigatória (Fase 3)
+
+Para cada rota protegida, executar e registrar as 3 respostas:
+
+| Cenário                                   | Esperado |
+|-------------------------------------------|----------|
+| Servidor sem `ADMIN_TOKEN`                | 403      |
+| `ADMIN_TOKEN` definido, header ausente/errado | 401  |
+| `ADMIN_TOKEN` definido, header correto    | 200      |
+

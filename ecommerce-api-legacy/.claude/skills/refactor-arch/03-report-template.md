@@ -130,3 +130,4 @@ Recommendation: Substituir todas as ocorrências por:
   user = db.session.get(User, t.user_id)
   task = db.session.get(Task, task_id)
 ```
+

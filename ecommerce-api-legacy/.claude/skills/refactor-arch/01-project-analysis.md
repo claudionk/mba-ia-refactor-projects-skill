@@ -127,3 +127,4 @@ Exemplos:
 - "E-commerce API para gestão de produtos, usuários e pedidos"
 - "LMS API com fluxo de checkout, matrículas e pagamentos"
 - "Task Manager API para criação, atribuição e acompanhamento de tarefas"
+

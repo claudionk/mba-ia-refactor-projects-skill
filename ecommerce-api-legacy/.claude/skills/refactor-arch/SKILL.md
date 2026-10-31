@@ -67,11 +67,13 @@ Consulte o arquivo de referência `01-project-analysis.md` para heurísticas det
 
 3. **Ordenar os findings** por severidade: CRITICAL → HIGH → MEDIUM → LOW.
 
-4. **Verificar APIs deprecated** — Consulte a seção "Deprecated APIs" do catálogo e marque qualquer uso encontrado.
+4. **Verificar autenticação de endpoints sensíveis (AP-17)** — Para cada rota administrativa, financeira ou destrutiva, confirme que existe middleware/decorator de autenticação **e** que ele nega o acesso quando a credencial não está configurada. Middleware opt-in/fail-open (`if (!token) return next()`) e `.env.example` com a credencial vazia são findings. A recomendação deve sempre ser deny-by-default (PB-12), nunca "opt-in para preservar o contrato".
 
-5. **Gerar o relatório completo** usando o template em `03-report-template.md`.
+5. **Verificar APIs deprecated** — Consulte a seção "Deprecated APIs" do catálogo e marque qualquer uso encontrado.
 
-6. **Salvar o relatório** em `reports/audit-project-N.md` (onde N é o número do projeto, infira pelo contexto ou pergunte).
+6. **Gerar o relatório completo** usando o template em `03-report-template.md`.
+
+7. **Salvar o relatório** em `reports/audit-project-N.md` (onde N é o número do projeto, infira pelo contexto ou pergunte).
 
 ### Output obrigatório da Fase 2
 
@@ -115,9 +117,11 @@ Proceed with refactoring (Phase 3)? [y/n]
 2. **Aplicar os padrões de transformação** do playbook em `05-refactoring-playbook.md` para cada finding identificado na Fase 2.
 
 3. **Preservar toda a funcionalidade existente** — Os mesmos endpoints devem existir nas mesmas URLs com os mesmos contratos de request/response.
+   **Exceção obrigatória:** endpoints sensíveis (AP-17) passam a exigir credencial. Preservar contrato **nunca** justifica deixá-los abertos. Documente a mudança no output.
 
 4. **Seguir a ordem de refatoração**:
    a. Extrair configurações para `config/settings` (corrige hardcoded secrets)
+   a2. **Proteger endpoints sensíveis com deny-by-default (PB-12), em qualquer stack** — Python e Node.js seguem o mesmo padrão: sem credencial configurada → 403; credencial errada → 401; comparação em tempo constante; `.env.example` com placeholder não vazio. É proibido o padrão opt-in que libera a rota quando a variável não está definida.
    b. Criar/reorganizar models com queries seguras
    c. Criar controllers com lógica de negócio
    d. Criar routes/views limpos
@@ -127,7 +131,9 @@ Proceed with refactoring (Phase 3)? [y/n]
 5. **Validar o resultado**:
    - Inicie a aplicação e confirme que ela sobe sem erros
    - Faça uma requisição para cada endpoint principal e confirme resposta
-   - Confirme que nenhum finding CRITICAL ou HIGH permanece
+   - Para cada rota protegida, teste os 3 cenários de PB-12 (sem `ADMIN_TOKEN` → 403, token errado → 401, token correto → 200) e registre os status obtidos
+   - Releia os middlewares de autenticação e confirme que nenhum caminho chama `next()`/a view quando a credencial não está configurada
+   - Confirme que nenhum finding CRITICAL ou HIGH permanece. Só declare isso depois dos dois itens acima
 
 ### Output obrigatório da Fase 3
 
@@ -144,6 +150,7 @@ PHASE 3: REFACTORING COMPLETE
 ## Validation
   ✓ Application boots without errors
   ✓ All endpoints respond correctly
+  ✓ Sensitive endpoints deny by default (no token → 403, wrong → 401, valid → 200)
   ✓ Zero CRITICAL/HIGH anti-patterns remaining
 ================================
 ```
@@ -161,3 +168,4 @@ Consulte os arquivos de referência nesta ordem quando precisar de orientação:
 | Formatar o relatório               | `03-report-template.md`      |
 | Definir a estrutura MVC alvo       | `04-mvc-guidelines.md`       |
 | Transformar código concreto        | `05-refactoring-playbook.md` |
+

@@ -265,3 +265,4 @@ def register_error_handlers(app):
 3. **Um arquivo por entidade de domínio** em models e controllers
 4. **Error handling centralizado** — use o middleware, não `try/except` espalhado em todos os handlers
 5. **Logging estruturado** — use `logging` (Python) ou logger (Node.js), nunca `print()`/`console.log()` em produção
+

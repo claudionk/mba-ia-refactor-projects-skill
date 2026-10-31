@@ -926,7 +926,7 @@ src/
 ├── models/                     user, course, enrollment, payment, auditLog (SQL parametrizado)
 ├── controllers/                checkout, report, user (regras de negócio)
 ├── routes/                     checkout, admin, user + index (apenas HTTP)
-├── middlewares/                errorHandler, adminAuth (opt-in)
+├── middlewares/                errorHandler, adminAuth (deny-by-default após a reexecução)
 ├── services/                   passwordService (scrypt + salt), paymentService
 ├── validators/checkoutValidator.js
 └── utils/                      logger, AppError
@@ -940,7 +940,7 @@ Issues Resolved
 - ✓ AP-05 God Class: dividida em camadas MVC.
 - ✓ AP-06 Lógica nas rotas: rotas finas, regras nos controllers e SQL nos models. Os callbacks viraram async/await.
 - ✓ AP-08 Log sensível: o cartão aparece só como ****4444 e a chave não é mais logada.
-- ✓ Endpoints admin sem auth: middleware opt-in, ativo quando ADMIN_TOKEN está definido.
+- ✗ Endpoints admin sem auth: a 1ª execução criou um middleware opt-in, que deixava as rotas abertas sem ADMIN_TOKEN. Corrigido na reexecução abaixo.
 - ✓ AP-09 N+1: o relatório usa uma query com JOIN, com ordem determinística.
 - ✓ AP-10 Estado global: o cache morto e o totalRevenue foram removidos.
 - ✓ AP-11 Validação: validator para checkout (e-mail, c_id inteiro, tipos) e para o :id do DELETE.
@@ -958,14 +958,49 @@ Validation
   - Curso inexistente: 404 "Curso não encontrado".
   - Relatório financeiro: 200 com o mesmo formato.
   - DELETE: 200, e o relatório depois dele não tem mais registros órfãos.
-- ✓ Nenhum finding CRITICAL ou HIGH permanece. Busca por pk_live e senha_super em src/ não encontrou nada.
+- ✗ Na 1ª execução esta linha afirmava que nenhum CRITICAL/HIGH permanecia, o que não era verdade: o adminAuth opt-in mantinha o HIGH de autenticação aberto. Ver reexecução abaixo.
 
 Mudanças de comportamento a conhecer:
 - Mensagem do DELETE: mudou para "Usuário deletado junto com suas matrículas e pagamentos." O texto antigo dizia que os registros ficavam sujos, o que deixou de ser verdade. O status continua 200.
-- ADMIN_TOKEN: sem ele definido, as rotas admin continuam abertas, como antes. Com ele definido, exigem o header x-admin-token.
+- ADMIN_TOKEN (1ª execução): sem ele definido, as rotas admin continuavam abertas. Isso foi apontado na revisão e corrigido na reexecução.
 - PAYMENT_GATEWAY_KEY: o novo settings.js a lê, mas o paymentService simulado ainda não a usa.
-- Não testei: o caminho 401 do adminAuth e a rota de checkout com um e-mail já existente.
+- Não testei (1ª execução): o caminho 401 do adminAuth e a rota de checkout com um e-mail já existente. Ambos foram testados na reexecução.
 - Não commitei nada: as mudanças e o reports/audit-project-3.md estão só na árvore de trabalho.
+
+---
+
+#### Reexecução após feedback da revisão (2026-10-30)
+
+**Feedback:** o `adminAuth.js` deixava a requisição passar quando `ADMIN_TOKEN` não estava definida, e o `.env.example` subia com `ADMIN_TOKEN=` vazio. `GET /api/admin/financial-report` e `DELETE /api/users/:id` continuavam abertos, embora este README dissesse que nenhum CRITICAL ou HIGH permanecia.
+
+**Causa na skill:** o catálogo não tinha anti-pattern de autenticação, então o achado entrou como "fora do catálogo". A Fase 3 mandava preservar contratos e não proibia o opt-in. O padrão deny-by-default só existia no `auth.py` do projeto 1, sem estar no playbook.
+
+**Mudanças na skill** (sincronizadas nos 3 projetos):
+- `02-antipatterns-catalog.md`: novo **AP-17 · Endpoint Sensível sem Autenticação / Autenticação Fail-Open**. Middleware opt-in e `.env.example` com credencial vazia passam a ser findings.
+- `05-refactoring-playbook.md`: novo **PB-12 · Middleware Deny-by-Default**, com o padrão do `auth.py` (Python) e o equivalente Express, regra de `.env.example` e a matriz de validação 403/401/200.
+- `SKILL.md`: a Fase 2 verifica o AP-17 e proíbe recomendar opt-in. A Fase 3 ganhou o passo **a2** (deny-by-default em qualquer stack), uma exceção explícita à regra de preservar contrato e a validação obrigatória dos 3 cenários antes de declarar "zero CRITICAL/HIGH".
+
+**Resultado da reexecução** (relatório completo em `reports/audit-project-2.md`):
+
+```
+CRITICAL: 0 | HIGH: 1 | MEDIUM: 0 | LOW: 2
+  [HIGH] AP-17 adminAuth fail-open + .env.example com ADMIN_TOKEN vazio
+  [LOW]  AP-02 senha literal 'change-me-seed' como fallback do seed
+  [LOW]  AP-16 verifyPassword exportado e não usado
+```
+
+Correções aplicadas: `adminAuth.js` passou a negar por padrão (403 sem `ADMIN_TOKEN`, 401 com token ausente ou errado, `crypto.timingSafeEqual`). O `.env.example` agora traz `ADMIN_TOKEN=troque-por-um-token-admin-forte`. O seed usa senha aleatória quando `SEED_USER_PASSWORD` não está definida, e o `verifyPassword` sem uso foi removido.
+
+Validação executada (app real, portas 3071 e 3072):
+
+| Rota | sem `ADMIN_TOKEN` | header ausente | token errado | token certo |
+|---|---|---|---|---|
+| `GET /api/admin/financial-report` | 403 | 401 | 401 | 200 |
+| `DELETE /api/users/:id` | 403 | 401 | 401 | 200 |
+
+Checkout: aprovado 200, e-mail existente 200, recusado 400, campos ausentes 400, curso inexistente 404. Agora sim, nenhum CRITICAL ou HIGH permanece.
+
+**Mudança de contrato intencional:** as duas rotas admin exigem o header `x-admin-token`. O `api.http` já envia esse header.
 
 ---
 
@@ -1349,10 +1384,10 @@ Still open
 .claude/skills/refactor-arch/
 ├── SKILL.md                    ← Instruções das 3 fases sequenciais
 ├── 01-project-analysis.md      ← Heurísticas de detecção de stack e arquitetura
-├── 02-antipatterns-catalog.md  ← 16 anti-patterns + 4 deprecated APIs com sinais de detecção
+├── 02-antipatterns-catalog.md  ← 17 anti-patterns + 4 deprecated APIs com sinais de detecção
 ├── 03-report-template.md       ← Template padronizado do relatório de auditoria
 ├── 04-mvc-guidelines.md        ← Regras MVC: responsabilidades por camada + exemplos
-└── 05-refactoring-playbook.md  ← 11 padrões de transformação com código antes/depois
+└── 05-refactoring-playbook.md  ← 12 padrões de transformação com código antes/depois
 ```
 
 ### Decisões de Design
@@ -1360,7 +1395,7 @@ Still open
 **SKILL.md como orquestrador, arquivos de referência como conhecimento:**  
 O `SKILL.md` age como um prompt de sistema estruturado que instrui o agente a executar 3 fases em sequência, com pontos de parada explícitos. Os arquivos de referência fornecem o conhecimento de domínio necessário para cada fase, sem misturá-los no arquivo principal — isso mantém o SKILL.md legível e os arquivos de referência focados.
 
-**Por que 16 anti-patterns + 4 deprecated APIs:**  
+**Por que 17 anti-patterns + 4 deprecated APIs:**  
 O catálogo foi construído bottom-up: primeiro identifiquei os problemas reais nos 3 projetos, depois generalizei os sinais de detecção. Isso garante que o catálogo detecte problemas reais, não apenas teóricos. A inclusão de deprecated APIs (`Model.query.get()`, `crypto.createCipher()`) resolve um problema específico do Projeto 3 que seria fácil de perder.
 
 **Por que separar guidelines de MVC e o playbook:**  
@@ -1547,7 +1582,7 @@ curl -X POST http://localhost:5000/login -H "Content-Type: application/json" -d 
 cd ecommerce-api-legacy
 node src/app.js
 # Em outro terminal:
-curl http://localhost:3000/api/admin/financial-report
+curl -H "x-admin-token: $ADMIN_TOKEN" http://localhost:3000/api/admin/financial-report  # sem ADMIN_TOKEN no servidor: 403
 ```
 
 **Projeto 3 (Python/Flask):**

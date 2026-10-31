@@ -5,5 +5,5 @@ module.exports = {
     dbPath: process.env.DB_PATH || ':memory:',
     paymentGatewayKey: process.env.PAYMENT_GATEWAY_KEY,
     adminToken: process.env.ADMIN_TOKEN,
-    seedUserPassword: process.env.SEED_USER_PASSWORD || 'change-me-seed',
+    seedUserPassword: process.env.SEED_USER_PASSWORD,
 };
