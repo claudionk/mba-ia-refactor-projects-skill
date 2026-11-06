@@ -2,7 +2,6 @@ import sqlite3
 from contextlib import contextmanager
 
 from flask import current_app, g
-from werkzeug.security import generate_password_hash
 
 SCHEMA = """
     CREATE TABLE IF NOT EXISTS produtos (
@@ -52,12 +51,6 @@ PRODUTOS_SEED = [
     ("Camiseta Dev", "Camiseta estampa código", 59.90, 100, "vestuario"),
 ]
 
-USUARIOS_SEED = [
-    ("Admin", "admin@loja.com", "admin123", "admin"),
-    ("João Silva", "joao@email.com", "123456", "cliente"),
-    ("Maria Santos", "maria@email.com", "senha123", "cliente"),
-]
-
 
 def get_db():
     if "db" not in g:
@@ -89,13 +82,6 @@ def _semear(db):
         db.executemany(
             "INSERT INTO produtos (nome, descricao, preco, estoque, categoria) VALUES (?, ?, ?, ?, ?)",
             PRODUTOS_SEED,
-        )
-        db.executemany(
-            "INSERT INTO usuarios (nome, email, senha, tipo) VALUES (?, ?, ?, ?)",
-            [
-                (nome, email, generate_password_hash(senha), tipo)
-                for nome, email, senha, tipo in USUARIOS_SEED
-            ],
         )
 
 

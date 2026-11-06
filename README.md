@@ -621,6 +621,18 @@ Pendências que precisam da sua decisão
 
 ```
 
+#### Correção após revisão (2026-11-06)
+
+A saída acima marcou o finding de credenciais (C6) como parcial, e ele não deveria ter sido tratado como resolvido. A recomendação agora está aplicada por inteiro, sem reexecutar a skill neste projeto:
+
+- O seed de `database.py` só carrega produtos; os 3 usuários com senha literal foram removidos.
+- A conta admin nasce de `flask --app app criar-admin`, com `ADMIN_EMAIL` e `ADMIN_PASSWORD` do ambiente. Sem elas, o comando falha.
+- Sem `SECRET_KEY`, a aplicação não inicia. Antes, ela gerava uma chave aleatória a cada boot.
+
+Validação em banco temporário: banco novo com 0 usuários e 10 produtos; as 3 credenciais antigas recebem 401; o comando falha sem variáveis e, com elas, cria um admin que consegue fazer login.
+
+**Mudança de contrato:** um banco novo não tem mais usuários de exemplo. Bancos criados antes mantêm as contas antigas: apague o `loja.db` para recriá-lo.
+
 
 ---
 
@@ -1001,6 +1013,39 @@ Validação executada (app real, portas 3071 e 3072):
 Checkout: aprovado 200, e-mail existente 200, recusado 400, campos ausentes 400, curso inexistente 404. Agora sim, nenhum CRITICAL ou HIGH permanece.
 
 **Mudança de contrato intencional:** as duas rotas admin exigem o header `x-admin-token`. O `api.http` já envia esse header.
+
+---
+
+#### Segunda reexecução, a partir do código original (2026-11-06)
+
+**Feedback:** a reexecução acima rodou sobre o código já refatorado e ficou com 3 findings, abaixo do mínimo de 5. No projeto 1, o `database.py` manteve `admin123` e as demais senhas do seed, só que com hash, embora o relatório marcasse o caso como CRITICAL e recomendasse um comando de setup.
+
+**Causa na skill:** o AP-02 não listava credencial de seed como sinal, o playbook não tinha padrão para ela e a Fase 3 aceitava cumprir só parte de uma recomendação. O PB-02 e as guidelines ainda ensinavam fallback literal para `SECRET_KEY`.
+
+**Mudanças na skill** (sincronizadas nos 3 projetos):
+- `02-antipatterns-catalog.md`: o AP-02 passa a incluir credencial de seed e fallback literal. Hash não corrige o finding, e a severidade continua CRITICAL mesmo sem rota de login.
+- `05-refactoring-playbook.md`: novo **PB-13 · Credencial de Seed → Comando de Setup ou Senha Aleatória**, com exemplos em Python e Node.js e matriz de validação. O PB-02 deixou de usar fallback literal.
+- `SKILL.md`: a Fase 1 parte do código original em reexecuções. A Fase 2 verifica credenciais de seed e confere o mínimo de 5 findings, sem inflar a contagem. A Fase 3 exige aplicar por inteiro a recomendação de cada CRITICAL e HIGH, com evidência por ação; o que faltar fica como `✗ OPEN` e impede declarar "Zero CRITICAL/HIGH".
+- `03-report-template.md` e `04-mvc-guidelines.md`: recomendações em ações verificáveis e nenhum valor padrão para segredos.
+
+**Resultado** (relatório completo em `reports/audit-project-2.md`):
+
+```
+CRITICAL: 3 | HIGH: 5 | MEDIUM: 4 | LOW: 4
+Total findings: 16 (partindo de 3 arquivos e ~180 linhas, commit 6d1ce62)
+```
+
+Em relação à 1ª execução, a auditoria passou a tratar a credencial de seed como CRITICAL próprio. Rodar o original também revelou um HIGH novo: `card: 123` ou `pwd: 123` em uma requisição anônima derruba o processo.
+
+**Validação** (app real, com linha de base capturada do original):
+
+| Verificação | Resultado |
+|---|---|
+| Checkout: aprovado, e-mail existente, sem `pwd`, recusado, sem campos, curso inexistente | 200, 200, 200, 400, 400, 404; mesmos corpos do original |
+| 9 entradas inválidas, incluindo as que derrubavam o original | 400; processo continua vivo |
+| Rotas admin: sem `ADMIN_TOKEN`, header ausente, token errado, token certo | 403, 401, 401, 200 |
+| Conta do seed | Hash muda a cada boot; `123`, `123456` e `change-me-seed` não a abrem |
+| Log | Sem cartão completo, chave ou senha |
 
 ---
 
@@ -1387,7 +1432,7 @@ Still open
 ├── 02-antipatterns-catalog.md  ← 17 anti-patterns + 4 deprecated APIs com sinais de detecção
 ├── 03-report-template.md       ← Template padronizado do relatório de auditoria
 ├── 04-mvc-guidelines.md        ← Regras MVC: responsabilidades por camada + exemplos
-└── 05-refactoring-playbook.md  ← 12 padrões de transformação com código antes/depois
+└── 05-refactoring-playbook.md  ← 13 padrões de transformação com código antes/depois
 ```
 
 ### Decisões de Design

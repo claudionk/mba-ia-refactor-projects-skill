@@ -6,19 +6,31 @@ API de E-commerce em Python/Flask usada como entrada do desafio `refactor-arch`.
 
 ```bash
 pip install -r requirements.txt
+cp .env.example .env   # troque os valores
 python app.py
 ```
 
-A aplicação sobe em `http://127.0.0.1:5000`. O banco SQLite (`loja.db`) é criado automaticamente no primeiro boot, já com produtos e usuários de exemplo.
+A aplicação sobe em `http://127.0.0.1:5000`. O banco SQLite (`loja.db`) é criado automaticamente no primeiro boot, já com produtos de exemplo. O seed não cria usuários: clientes se cadastram por `POST /usuarios` e a conta admin é criada pelo comando abaixo.
+
+## Conta administrativa
+
+```bash
+ADMIN_EMAIL=voce@exemplo.com ADMIN_PASSWORD='uma-senha-forte' flask --app app criar-admin
+```
+
+Sem as duas variáveis, o comando falha e nenhuma conta é criada.
+
+> **Banco criado por versões anteriores:** o seed antigo criava `admin@loja.com`, `joao@email.com` e `maria@email.com` com senhas publicadas no repositório. Remover o seed não revoga essas contas. Apague o `loja.db` para recriar o banco.
 
 ## Configuração
 
-Toda configuração vem de variáveis de ambiente (ver `.env.example`). O projeto não lê `.env` sozinho: exporte as variáveis no shell ou use seu gerenciador de ambiente.
+Toda configuração vem de variáveis de ambiente, lidas do shell ou do arquivo `.env` na raiz do projeto (ver `.env.example`). Variáveis do shell têm prioridade.
 
 | Variável      | Padrão      | Função                                                                 |
 |---------------|-------------|------------------------------------------------------------------------|
-| `SECRET_KEY`  | aleatória   | Chave da aplicação. Sem valor, é gerada a cada boot.                   |
+| `SECRET_KEY`  | obrigatória | Chave da aplicação. Sem valor, a aplicação não inicia.                 |
 | `ADMIN_TOKEN` | vazio       | Token das rotas administrativas. Vazio = rotas admin desabilitadas.    |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | vazio | Dados da conta criada por `criar-admin`. Vazio = o comando falha. |
 | `DEBUG`       | `false`     | Modo debug do Flask. Não use em produção.                              |
 | `HOST`        | `127.0.0.1` | Interface de escuta.                                                   |
 | `PORT`        | `5000`      | Porta HTTP.                                                            |

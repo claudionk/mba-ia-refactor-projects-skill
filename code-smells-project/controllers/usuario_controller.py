@@ -42,6 +42,17 @@ def criar(dados):
     return {"id": usuario_id}
 
 
+def criar_admin(email, senha):
+    if not email or not senha:
+        raise ValidationError("ADMIN_EMAIL e ADMIN_PASSWORD sao obrigatorios")
+
+    db = get_db()
+    if UsuarioModel.get_by_email(db, email) is not None:
+        raise ValidationError(f"Ja existe um usuario com o email {email}")
+    with transacao(db):
+        return UsuarioModel.create(db, "Admin", email, generate_password_hash(senha), tipo="admin")
+
+
 def login(dados):
     dados = dados if isinstance(dados, dict) else {}
     email = dados.get("email", "")
