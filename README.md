@@ -134,12 +134,15 @@ Os relatórios dos projetos 2 e 3 trazem a saída da Fase 3, com a cobertura de 
 
 ### Logs de Execução
 
-Saída de `python scripts/verify_clean_clone.py`:
+Saída de `python scripts/verify_clean_clone.py --source https://github.com/claudionk/mba-ia-refactor-projects-skill.git`, contra o repositório público:
 
 ```
+Clone limpo de https://github.com/claudionk/mba-ia-refactor-projects-skill.git
+Commit: 438b55b docs: Preenche Resultados do README e adiciona verificação em clone limpo
+
 == code-smells-project (Python/Flask)
   [PASS] pip install -r requirements.txt
-  [PASS] python -m unittest discover -s tests -t . (Ran 16 tests in 5.906s)
+  [PASS] python -m unittest discover -s tests -t . (Ran 16 tests in 5.613s)
   [PASS] com o .env.example sem editar, a aplicação recusa iniciar e explica
   [PASS] flask --app app criar-admin (Admin criado: id=1)
   [PASS] GET /health
@@ -163,7 +166,7 @@ Saída de `python scripts/verify_clean_clone.py`:
 
 == task-manager-api (Python/Flask + SQLAlchemy)
   [PASS] pip install -r requirements.txt
-  [PASS] python -m unittest discover -s tests -t . (Ran 19 tests in 18.311s)
+  [PASS] python -m unittest discover -s tests -t . (Ran 19 tests in 18.385s)
   [PASS] com o .env.example sem editar, a aplicação recusa iniciar e explica
   [PASS] python seed.py
   [PASS] flask --app app create-admin (Admin criado: id=4)
