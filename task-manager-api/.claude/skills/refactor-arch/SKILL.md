@@ -12,6 +12,10 @@ Esta skill executa **3 fases sequenciais**. Leia e siga cada fase com rigor. Nun
 
 **Objetivo:** Entender completamente o projeto antes de qualquer julgamento.
 
+### Reexecução em projeto já refatorado
+
+A auditoria precisa partir do código original. Rodar a skill sobre o resultado de uma execução anterior mede só o que sobrou e produz um relatório que não representa o projeto. Se o histórico do git mostrar que a skill já refatorou este projeto, avise o usuário e, com a autorização dele e a árvore de trabalho limpa, restaure o código do commit original antes de iniciar a Fase 1. Mantenha `.claude/` e arquivos ignorados, como `.env`.
+
 ### Passos obrigatórios
 
 1. **Detectar a stack** — Leia os arquivos de manifesto (requirements.txt, package.json, Gemfile, pom.xml, go.mod, etc.) para identificar:
@@ -69,11 +73,15 @@ Consulte o arquivo de referência `01-project-analysis.md` para heurísticas det
 
 4. **Verificar autenticação de endpoints sensíveis (AP-17)** — Para cada rota administrativa, financeira ou destrutiva, confirme que existe middleware/decorator de autenticação **e** que ele nega o acesso quando a credencial não está configurada. Middleware opt-in/fail-open (`if (!token) return next()`) e `.env.example` com a credencial vazia são findings. A recomendação deve sempre ser deny-by-default (PB-12), nunca "opt-in para preservar o contrato".
 
-5. **Verificar APIs deprecated** — Consulte a seção "Deprecated APIs" do catálogo e marque qualquer uso encontrado.
+5. **Verificar credenciais de seed (AP-02)** — Leia seeds, fixtures, migrations e fallbacks de configuração. Toda conta criada com senha literal é finding CRITICAL, inclusive quando a senha recebe hash ou quando ainda não existe rota de login. A recomendação deve seguir o PB-13.
 
-6. **Gerar o relatório completo** usando o template em `03-report-template.md`.
+6. **Verificar APIs deprecated** — Consulte a seção "Deprecated APIs" do catálogo e marque qualquer uso encontrado.
 
-7. **Salvar o relatório** em `reports/audit-project-N.md` (onde N é o número do projeto, infira pelo contexto ou pergunte).
+7. **Conferir o mínimo de 5 findings** — Com menos de 5, confirme que a auditoria partiu do código original (ver Fase 1) e releia cada arquivo contra o catálogo inteiro. Se ainda assim não houver 5 findings reais, informe isso ao usuário. Nunca invente nem infle findings para atingir o número.
+
+8. **Gerar o relatório completo** usando o template em `03-report-template.md`.
+
+9. **Salvar o relatório** em `reports/audit-project-N.md` (onde N é o número do projeto, infira pelo contexto ou pergunte).
 
 ### Output obrigatório da Fase 2
 
@@ -116,11 +124,18 @@ Proceed with refactoring (Phase 3)? [y/n]
 
 2. **Aplicar os padrões de transformação** do playbook em `05-refactoring-playbook.md` para cada finding identificado na Fase 2.
 
+   **Aplicar por inteiro a recomendação de cada CRITICAL e HIGH.** Antes de editar, divida a `Recommendation` de cada um desses findings em ações verificáveis e execute todas:
+   - Um finding só está resolvido quando **todas** as ações foram feitas como o relatório descreve. Resolver parte dele mantém o finding aberto.
+   - Trocar a ação recomendada por uma alternativa mais fraca não é correção. Exemplos: aplicar hash a uma senha de seed quando o relatório manda criar a conta por comando de setup; gerar uma chave aleatória quando o relatório manda falhar sem a variável.
+   - Preservar contrato ou manter dados de demonstração não justifica omitir uma ação.
+   - Se uma ação depender de decisão do usuário ou não puder ser aplicada, pergunte antes de encerrar a fase. Sem resposta, registre o finding como `✗ OPEN` com o motivo. Nesse caso, é proibido declarar "Zero CRITICAL/HIGH".
+
 3. **Preservar toda a funcionalidade existente** — Os mesmos endpoints devem existir nas mesmas URLs com os mesmos contratos de request/response.
    **Exceção obrigatória:** endpoints sensíveis (AP-17) passam a exigir credencial. Preservar contrato **nunca** justifica deixá-los abertos. Documente a mudança no output.
 
 4. **Seguir a ordem de refatoração**:
    a. Extrair configurações para `config/settings` (corrige hardcoded secrets)
+   a1. **Eliminar credenciais de seed (PB-13)** — Nenhuma senha literal no seed, com ou sem hash. Admin nasce de comando de setup; conta exigida por integridade de dados recebe senha aleatória.
    a2. **Proteger endpoints sensíveis com deny-by-default (PB-12), em qualquer stack** — Python e Node.js seguem o mesmo padrão: sem credencial configurada → 403; credencial errada → 401; comparação em tempo constante; `.env.example` com placeholder não vazio. É proibido o padrão opt-in que libera a rota quando a variável não está definida.
    b. Criar/reorganizar models com queries seguras
    c. Criar controllers com lógica de negócio
@@ -133,7 +148,9 @@ Proceed with refactoring (Phase 3)? [y/n]
    - Faça uma requisição para cada endpoint principal e confirme resposta
    - Para cada rota protegida, teste os 3 cenários de PB-12 (sem `ADMIN_TOKEN` → 403, token errado → 401, token correto → 200) e registre os status obtidos
    - Releia os middlewares de autenticação e confirme que nenhum caminho chama `next()`/a view quando a credencial não está configurada
-   - Confirme que nenhum finding CRITICAL ou HIGH permanece. Só declare isso depois dos dois itens acima
+   - Execute a validação do PB-13 e registre os resultados
+   - Releia no relatório a `Recommendation` de cada CRITICAL e HIGH e aponte, para cada ação, o arquivo e a linha que a implementam, ou o teste que a comprova. Ação sem evidência mantém o finding aberto
+   - Confirme que nenhum finding CRITICAL ou HIGH permanece. Só declare isso depois de todos os itens acima
 
 ### Output obrigatório da Fase 3
 
@@ -146,11 +163,17 @@ PHASE 3: REFACTORING COMPLETE
 
 ## Issues Resolved
   ✓ [lista de findings corrigidos]
+  ✗ OPEN [finding CRITICAL/HIGH não resolvido por inteiro e o motivo, se houver]
+
+## Recommendation Coverage (CRITICAL/HIGH)
+  [finding] — [ação recomendada] → [arquivo:linha ou teste que comprova]
 
 ## Validation
   ✓ Application boots without errors
   ✓ All endpoints respond correctly
   ✓ Sensitive endpoints deny by default (no token → 403, wrong → 401, valid → 200)
+  ✓ No seed credentials (PB-13)
+  ✓ Every CRITICAL/HIGH recommendation applied in full
   ✓ Zero CRITICAL/HIGH anti-patterns remaining
 ================================
 ```

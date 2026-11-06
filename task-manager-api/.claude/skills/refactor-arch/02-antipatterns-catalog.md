@@ -41,8 +41,16 @@ cursor.execute("SELECT * FROM usuarios WHERE email = '" + email + "'")
 - `PASSWORD = "..."`, `API_KEY = "..."`, `TOKEN = "..."` com valor literal
 - Chaves com padrões como `pk_live_`, `sk_live_`, `bearer_`, seguidas de valor
 - Senha de banco hardcoded em string de conexão: `"postgresql://admin:senha123@..."`
+- **Credencial de seed:** conta criada por seed, fixture ou migration com senha literal no código
+  - `("Admin", "admin@loja.com", "admin123", "admin")` em listas de seed
+  - `INSERT INTO users (name, email, pass) VALUES ('Leonan', 'leonan@fullcycle.com.br', '123')`
+  - `user.set_password('1234')` em `seed.py`
+  - `generate_password_hash("admin123")`: o hash protege o banco, mas a senha continua pública no repositório
+- Fallback literal para segredo ausente: `process.env.SEED_USER_PASSWORD || 'change-me-seed'`, `os.environ.get("SECRET_KEY", "dev-key")`
 
-**Verificar em:** `app.py`, `app.js`, `config.py`, `settings.py`, `utils.js`, qualquer arquivo de inicialização.
+**Verificar em:** `app.py`, `app.js`, `config.py`, `settings.py`, `utils.js`, `database.py`, `seed.py`, `init.js`, migrations, fixtures, qualquer arquivo de inicialização.
+
+**Regra:** credencial de seed é CRITICAL mesmo com hash e mesmo que a API não tenha rota de login hoje. Aplicar hash à senha literal **não corrige** este anti-pattern. A correção é o PB-13.
 
 ---
 

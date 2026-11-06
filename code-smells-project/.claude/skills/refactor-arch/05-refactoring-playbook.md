@@ -84,7 +84,7 @@ app.config["DEBUG"] = True
 import os
 
 class Settings:
-    SECRET_KEY = os.environ.get("SECRET_KEY", "dev-only-insecure-key")
+    SECRET_KEY = os.environ["SECRET_KEY"]  # sem fallback literal: falha na inicialização se ausente
     DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
     DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///app.db")
 ```
@@ -677,4 +677,83 @@ Para cada rota protegida, executar e registrar as 3 respostas:
 | Servidor sem `ADMIN_TOKEN`                | 403      |
 | `ADMIN_TOKEN` definido, header ausente/errado | 401  |
 | `ADMIN_TOKEN` definido, header correto    | 200      |
+
+---
+
+## PB-13 · Credencial de Seed → Comando de Setup ou Senha Aleatória
+
+**Anti-pattern:** AP-02 (sinal "credencial de seed")  
+**Aplica-se a:** Python/Flask, Node.js/Express — seeds, fixtures e migrations de qualquer stack
+
+### Regras (valem para qualquer linguagem)
+
+1. **Nenhuma senha literal no seed, com ou sem hash.** Trocar `"admin123"` por `generate_password_hash("admin123")` não é correção: a senha continua publicada no repositório.
+2. **Conta administrativa nunca nasce do seed.** Ela é criada por um comando de setup explícito, com a senha lida de variável de ambiente. Sem a variável, o comando falha; não existe valor padrão.
+3. **A variável da senha do admin fica vazia no `.env.example`.** Um placeholder copiado viraria uma senha pública. Aqui, vazio é o estado seguro: o comando falha e nenhuma conta é criada. Esta é uma exceção à regra de placeholder do PB-12.
+4. **Conta de demonstração sem dependência é removida do seed.** Se o sistema tem cadastro, os usuários de teste são criados por ele.
+5. **Conta exigida por integridade de dados** (matrícula, pagamento ou relatório referenciam o usuário) recebe o hash de uma senha aleatória gerada no seed. A senha nunca é logada nem retornada, e não há fallback literal.
+6. **Banco já semeado continua com as contas antigas.** Remover o seed não as revoga: documente a recriação do banco ou a troca das senhas.
+
+### Python — comando de setup com Flask CLI
+
+**Antes:**
+```python
+USUARIOS_SEED = [
+    ("Admin", "admin@loja.com", "admin123", "admin"),
+    ("João Silva", "joao@email.com", "123456", "cliente"),
+]
+
+db.executemany(
+    "INSERT INTO usuarios (nome, email, senha, tipo) VALUES (?, ?, ?, ?)",
+    [(nome, email, generate_password_hash(senha), tipo) for nome, email, senha, tipo in USUARIOS_SEED],
+)
+```
+
+**Depois:**
+```python
+# database.py: o seed só carrega dados sem credencial (ex.: catálogo de produtos)
+
+# app.py
+@app.cli.command("criar-admin")
+def criar_admin():
+    """Cria a conta admin com ADMIN_EMAIL e ADMIN_PASSWORD do ambiente."""
+    usuario_controller.criar_admin(
+        email=current_app.config["ADMIN_EMAIL"],
+        senha=current_app.config["ADMIN_PASSWORD"],
+    )  # ValidationError se alguma variável estiver vazia ou se o e-mail já existir
+```
+
+```
+# .env.example
+ADMIN_EMAIL=
+ADMIN_PASSWORD=
+```
+
+Uso: `flask --app app criar-admin`.
+
+### Node.js — fixture exigida por integridade
+
+**Antes:**
+```js
+db.run("INSERT INTO users (name, email, pass) VALUES ('Leonan', 'leonan@fullcycle.com.br', '123')");
+```
+
+**Depois:**
+```js
+// A matrícula e o pagamento do seed referenciam este usuário, mas a senha dele não é conhecida por ninguém.
+const fixturePassword = await passwordService.hashPassword(passwordService.generateRandomPassword());
+await run("INSERT INTO users (name, email, pass) VALUES (?, ?, ?)", ['Leonan', 'leonan@fullcycle.com.br', fixturePassword]);
+```
+
+Se o projeto precisa de admin, o equivalente é um script (`npm run create-admin`) que falha quando `ADMIN_PASSWORD` não está definida.
+
+### Validação obrigatória (Fase 3)
+
+| Verificação                                                     | Esperado                |
+|-----------------------------------------------------------------|-------------------------|
+| Buscar as senhas do relatório em seed, config e `.env.example`  | Nenhuma ocorrência      |
+| Banco novo: login com a credencial antiga (se houver rota)      | 401                     |
+| Banco novo: contas `admin` criadas pelo boot                    | 0                       |
+| Comando de setup sem a variável (se houver comando)             | Falha, nenhuma conta    |
+| Comando de setup com a variável, seguido de login               | Conta criada, 200       |
 

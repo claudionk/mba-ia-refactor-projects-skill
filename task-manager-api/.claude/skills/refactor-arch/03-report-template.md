@@ -88,7 +88,9 @@ Phase 2 complete. Proceed with refactoring (Phase 3)? [y/n]
 
 4. **Impacto concreto:** Descreva o que pode acontecer de errado no **contexto desta aplicação**.
 
-5. **Recomendação acionável:** A recomendação deve ser específica o suficiente para implementar, não genérica.
+5. **Recomendação acionável:** A recomendação deve ser específica o suficiente para implementar, não genérica. Em CRITICAL e HIGH, escreva cada ação como um item verificável: a Fase 3 precisa cumprir todos os itens para considerar o finding resolvido.
+
+6. **Mínimo de 5 findings:** O relatório de um projeto legado precisa ter pelo menos 5 findings reais. Nunca invente nem infle findings para atingir o número (ver Fase 2 do `SKILL.md`).
 
 ### Separador de findings
 Use `---` (três hífens) entre cada finding para facilitar a leitura.

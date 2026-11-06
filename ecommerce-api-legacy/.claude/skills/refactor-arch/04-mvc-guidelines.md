@@ -72,7 +72,7 @@ projeto/
 
 **DEVE:**
 - Ler toda configuração de variáveis de ambiente (`os.environ`, `process.env`)
-- Definir valores padrão seguros para desenvolvimento
+- Definir valores padrão seguros para desenvolvimento, apenas em configurações que não são segredo (segredo ausente falha ou desabilita o recurso)
 - Exportar um objeto/dict com todas as configurações centralizadas
 
 **NUNCA DEVE:**
@@ -85,7 +85,7 @@ projeto/
 import os
 
 class Settings:
-    SECRET_KEY = os.environ.get("SECRET_KEY", "dev-only-key-change-in-prod")
+    SECRET_KEY = os.environ["SECRET_KEY"]  # sem fallback literal
     DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///app.db")
     DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
 ```
