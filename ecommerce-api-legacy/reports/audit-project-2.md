@@ -270,8 +270,8 @@ A estrutura MVC reaproveita a da entrega anterior (b8a64df), que já atendia aos
     (4) tempo constante → src/middlewares/adminAuth.js:8
     (5) placeholder e header → .env.example:5; api.http:29, 33
   AP-11 queda do servidor
-    (1) validator → src/validators/checkoutValidator.js:10-23
-    (2) :id inteiro positivo → src/validators/checkoutValidator.js:25-28
+    (1) validator → src/validators/checkoutValidator.js:10-22
+    (2) :id inteiro positivo → src/validators/checkoutValidator.js:24-27
     (3) 400 em entrada inválida → teste: 9 entradas → 400; processo continua vivo
   AP-05 God Class
     (1) camadas separadas → árvore acima
