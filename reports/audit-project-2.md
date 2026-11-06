@@ -24,8 +24,8 @@ Date:    2026-11-06
 
 ## Summary
 
-CRITICAL: 3 | HIGH: 5 | MEDIUM: 4 | LOW: 4
-Total findings: 16
+CRITICAL: 3 | HIGH: 6 | MEDIUM: 4 | LOW: 4
+Total findings: 17
 
 ## Findings
 
@@ -81,7 +81,18 @@ Recommendation (PB-12):
   (2) Sem `ADMIN_TOKEN` no servidor → 403.
   (3) Header `x-admin-token` ausente ou errado → 401.
   (4) Comparar com `crypto.timingSafeEqual`.
-  (5) `.env.example` com placeholder não vazio; atualizar `api.http` para enviar o header.
+  (5) `.env.example` com placeholder não vazio, que nunca vale como credencial; atualizar `api.http` para enviar o header.
+
+---
+
+### [HIGH] Checkout age em nome de uma conta só pelo e-mail
+File: src/AppManager.js:40, 74
+Anti-pattern: AP-17 — Endpoint Sensível sem Autenticação / Autenticação Fail-Open (sinal "identidade vinda do cliente")
+Description: Quando o e-mail já existe, o checkout usa `user.id` sem conferir `pwd`. Executado: `eml` existente com qualquer senha responde 200 e cria matrícula e pagamento nessa conta.
+Impact: Qualquer cliente registra compras em uma conta alheia sabendo só o e-mail, o que altera os dados e o relatório financeiro dessa pessoa.
+Recommendation (PB-14):
+  (1) Com e-mail existente, conferir `pwd` com o hash da conta em tempo constante.
+  (2) Senha ausente ou errada → 401.
 
 ---
 
@@ -202,8 +213,8 @@ Impact: Ruído e superfície de configuração morta.
 Recommendation: Remover.
 
 ================================
-Total: 16 findings
-CRITICAL: 3 | HIGH: 5 | MEDIUM: 4 | LOW: 4
+Total: 17 findings
+CRITICAL: 3 | HIGH: 6 | MEDIUM: 4 | LOW: 4
 ================================
 
 Deprecated APIs: nenhuma encontrada (sem `crypto.createCipher`, sem `res.send(status, body)`).
@@ -212,7 +223,6 @@ Observações fora do catálogo (não entram na contagem):
 - A chave `pk_live_` e a senha continuam no histórico do git mesmo depois da refatoração. Se fossem reais, precisariam ser trocadas no gateway e no banco.
 - Checkout (linhas 50-61) e DELETE fazem várias escritas sem transação. Com a conexão SQLite única, um `BEGIN` interfere em requisições concorrentes.
 - Pagamento recusado deixa o usuário criado, pois o INSERT (linha 69) ocorre antes da decisão (linha 46).
-- Checkout com e-mail existente matricula aquele usuário sem conferir `pwd`.
 - O gateway é simulado: `PAYMENT_GATEWAY_KEY` não tem uso além do log removido.
 
 Phase 2 complete. Proceed with refactoring (Phase 3)? [y/n]
@@ -240,18 +250,18 @@ src/
 .env.example
 Removidos: src/AppManager.js e src/utils.js.
 
-A estrutura MVC reaproveita a da entrega anterior (b8a64df), que já atendia aos findings. Foram alterados `database/init.js`, `config/settings.js`, `validators/checkoutValidator.js`, `.env.example` e `README.md`.
+A estrutura MVC reaproveita a da entrega anterior (b8a64df), que já atendia aos findings. Foram alterados `database/init.js`, `config/settings.js`, `validators/checkoutValidator.js`, `controllers/checkoutController.js`, `services/passwordService.js`, `models/userModel.js`, `.env.example` e `README.md`, e foi criado `tests/api.test.js`.
 
 ## Issues Resolved
   ✓ CRITICAL: AP-02 secrets, AP-02 credencial de seed, AP-04 hash e senha padrão
-  ✓ HIGH: AP-17, AP-11 (queda do servidor), AP-05, AP-06, AP-08
+  ✓ HIGH: AP-17 (rotas admin), AP-17 (identidade no checkout), AP-11 (queda do servidor), AP-05, AP-06, AP-08
   ✓ MEDIUM: AP-09, AP-12, AP-10, DELETE sem cascata
   ✓ LOW: AP-13, AP-14, AP-15, AP-16
 
 ## Recommendation Coverage (CRITICAL/HIGH)
   AP-02 secrets
     (1) config removido → src/utils.js não existe mais
-    (2) process.env sem fallback de segredo → src/config/settings.js:4-7
+    (2) process.env sem fallback de segredo → src/config/settings.js:11-12
     (3) dbUser/dbPass/smtpUser eliminados → busca sem ocorrências em src/
     (4) .env.example sem valores reais → .env.example:1-5
   AP-02 credencial de seed (PB-13)
@@ -262,13 +272,16 @@ A estrutura MVC reaproveita a da entrega anterior (b8a64df), que já atendia aos
   AP-04 hash e senha padrão
     (1) scrypt + salt → src/services/passwordService.js:6-14
     (2) badCrypto removido → busca sem ocorrências em src/
-    (3) sem pwd, senha aleatória → src/controllers/checkoutController.js:16; teste: checkout sem pwd → 200
+    (3) sem pwd, senha aleatória → src/controllers/checkoutController.js:21; teste: checkout sem pwd → 200
   AP-17 (PB-12)
     (1) adminAuth nas 2 rotas → src/routes/adminRoutes.js:7; src/routes/userRoutes.js:8
     (2) sem ADMIN_TOKEN → 403 → src/middlewares/adminAuth.js:13-15; teste abaixo
     (3) header ausente/errado → 401 → src/middlewares/adminAuth.js:16-18; teste abaixo
     (4) tempo constante → src/middlewares/adminAuth.js:8
-    (5) placeholder e header → .env.example:5; api.http:29, 33
+    (5) placeholder e header → .env.example:5; src/config/settings.js:6, 12; teste: placeholder → 403; api.http:29, 33
+  AP-17 identidade no checkout (PB-14)
+    (1) confere a senha em tempo constante → src/controllers/checkoutController.js:16; src/services/passwordService.js:16-21
+    (2) ausente ou errada → 401 → src/controllers/checkoutController.js:17; teste abaixo
   AP-11 queda do servidor
     (1) validator → src/validators/checkoutValidator.js:10-22
     (2) :id inteiro positivo → src/validators/checkoutValidator.js:24-27
@@ -281,12 +294,13 @@ A estrutura MVC reaproveita a da entrega anterior (b8a64df), que já atendia aos
     (2) decisão de pagamento → src/services/paymentService.js:4-6
     (3) SQL só nos models → src/models/; DDL e seed em src/database/init.js
   AP-08 log sensível
-    (1) chave não é logada e (2) cartão mascarado → src/controllers/checkoutController.js:27; teste: nenhum segredo no log
+    (1) chave não é logada e (2) cartão mascarado → src/controllers/checkoutController.js:32; teste: nenhum segredo no log
 
-## Validation (aplicação real, portas 3101-3104)
+## Validation (aplicação real; `npm test` e `scripts/verify_clean_clone.py` repetem estes cenários)
   ✓ Application boots without errors
   ✓ All endpoints respond correctly (mesmos status e corpos da linha de base do original)
-      POST /api/checkout: aprovado 200 | e-mail existente 200 | sem pwd 200 | c_id string 200
+      POST /api/checkout: aprovado 200 | e-mail existente com a senha certa 200 | sem pwd 200 | c_id string 200
+                          e-mail existente sem senha ou com senha errada 401
                           recusado 400 | sem campos 400 | curso inexistente 404
       GET /api/admin/financial-report: 200, agora com ordem estável
       DELETE /api/users/1: 200; o relatório seguinte não tem aluno "Unknown"
@@ -295,17 +309,23 @@ A estrutura MVC reaproveita a da entrega anterior (b8a64df), que já atendia aos
       |---------------------------------|-----------------|----------------|--------------|-------------|
       | GET /api/admin/financial-report | 403             | 401            | 401          | 200         |
       | DELETE /api/users/:id           | 403             | 401            | 401          | 200         |
+      Com ADMIN_TOKEN igual ao placeholder do .env.example, as duas rotas respondem 403 mesmo enviando o placeholder.
       adminAuth.js relido: nenhum caminho chama next() sem credencial configurada.
   ✓ No seed credentials (PB-13)
       Senhas do relatório: nenhuma ocorrência em src/, .env.example e api.http.
       Conta do seed: hash diferente a cada boot; nenhuma senha conhecida a abre.
       Conta admin e comando de setup: não se aplicam, pois o projeto não tem usuário admin nem login.
+  ✓ Placeholders rejected; identity checked on checkout (PB-12, PB-14)
+      Conta admin por papel não se aplica: as rotas protegidas usam ADMIN_TOKEN e o projeto não tem login.
+  ✓ Clean clone: README commands work and automated tests pass
+      Os testes rodaram também contra o commit anterior e falharam nos 3 cenários novos, como esperado.
   ✓ Every CRITICAL/HIGH recommendation applied in full (cobertura acima)
   ✓ Zero CRITICAL/HIGH anti-patterns remaining
 
 Mudanças de contrato (intencionais):
 - GET /api/admin/financial-report e DELETE /api/users/:id exigem o header x-admin-token (AP-17).
 - A mensagem do DELETE mudou para "Usuário deletado junto com suas matrículas e pagamentos."; o status continua 200.
+- POST /api/checkout com e-mail já cadastrado exige a senha dessa conta; sem ela, responde 401.
 - Entradas de tipo inválido, que derrubavam o processo, agora recebem 400.
 - E-mail inválido e c_id não inteiro positivo agora recebem 400.
 - A API lê a configuração de variáveis de ambiente; sem PORT, usa 3000.

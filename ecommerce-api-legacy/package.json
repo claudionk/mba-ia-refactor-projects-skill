@@ -4,7 +4,8 @@
   "description": "Boilerplate com código legado para refatoração",
   "main": "src/app.js",
   "scripts": {
-    "start": "node src/app.js"
+    "start": "node src/app.js",
+    "test": "node --test tests/api.test.js"
   },
   "dependencies": {
     "dotenv": "^18.0.9",

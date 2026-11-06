@@ -13,6 +13,13 @@ async function hashPassword(password) {
     return `${salt.toString('hex')}:${key.toString('hex')}`;
 }
 
+async function verifyPassword(password, storedHash) {
+    const [salt, key] = storedHash.split(':');
+    const expected = Buffer.from(key, 'hex');
+    const received = await scrypt(password, Buffer.from(salt, 'hex'));
+    return expected.length === received.length && crypto.timingSafeEqual(expected, received);
+}
+
 const generateRandomPassword = () => crypto.randomBytes(18).toString('base64url');
 
-module.exports = { hashPassword, generateRandomPassword };
+module.exports = { hashPassword, verifyPassword, generateRandomPassword };

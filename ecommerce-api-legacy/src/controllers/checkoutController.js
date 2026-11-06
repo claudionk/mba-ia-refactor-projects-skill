@@ -11,7 +11,12 @@ const logger = require('../utils/logger');
 
 async function findOrCreateUser({ name, email, password }) {
     const existing = await userModel.getByEmail(email);
-    if (existing) return existing.id;
+    if (existing) {
+        // Identidade não vem só do e-mail: comprar em nome de uma conta exige a senha dela.
+        const allowed = password && await passwordService.verifyPassword(password, existing.pass);
+        if (!allowed) throw new AppError(401, 'Credenciais inválidas');
+        return existing.id;
+    }
 
     const passwordHash = await passwordService.hashPassword(password || passwordService.generateRandomPassword());
     return userModel.create({ name, email, passwordHash });
