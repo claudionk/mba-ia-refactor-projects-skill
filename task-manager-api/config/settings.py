@@ -4,7 +4,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DEV_SECRET_KEY = 'dev-only-key-change-in-prod'
+PLACEHOLDER_PREFIX = 'troque-por-'
+
+
+def _required_secret(name):
+    value = os.environ.get(name, '')
+    if not value or value.startswith(PLACEHOLDER_PREFIX):
+        raise RuntimeError(
+            f'Defina {name} no ambiente ou no .env. '
+            'Gere um valor com: python -c "import secrets; print(secrets.token_hex(32))"'
+        )
+    return value
 
 
 def _as_bool(value):
@@ -12,7 +22,7 @@ def _as_bool(value):
 
 
 class Settings:
-    SECRET_KEY = os.environ.get('SECRET_KEY', DEV_SECRET_KEY)
+    SECRET_KEY = _required_secret('SECRET_KEY')
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL', 'sqlite:///tasks.db')
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
@@ -21,6 +31,10 @@ class Settings:
     PORT = int(os.environ.get('PORT', '5000'))
     TOKEN_TTL_SECONDS = int(os.environ.get('TOKEN_TTL_SECONDS', str(8 * 3600)))
     LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
+
+    # Lidas só pelo comando create-admin. Sem valor padrão: o comando falha se estiverem vazias.
+    ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', '')
+    ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '')
 
     SMTP_HOST = os.environ.get('SMTP_HOST', 'smtp.gmail.com')
     SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))

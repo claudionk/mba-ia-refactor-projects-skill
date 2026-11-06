@@ -8,6 +8,7 @@ CLOSED_STATUSES = (STATUS_DONE, STATUS_CANCELLED)
 
 VALID_ROLES = ('user', 'admin', 'manager')
 DEFAULT_ROLE = 'user'
+MANAGER_ROLES = ('admin', 'manager')
 
 MIN_PRIORITY = 1
 MAX_PRIORITY = 5

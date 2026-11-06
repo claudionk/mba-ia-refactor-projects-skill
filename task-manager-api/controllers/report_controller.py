@@ -6,6 +6,7 @@ from models.category_model import Category
 from models.task_model import Task
 from models.user_model import User
 from utils.errors import NotFoundError
+from utils.permissions import require_manager, require_owner_or_manager
 from utils.time_utils import utc_now
 
 PRIORITY_LABELS = {1: 'critical', 2: 'high', 3: 'medium', 4: 'low', 5: 'minimal'}
@@ -13,7 +14,8 @@ PRIORITY_LABELS = {1: 'critical', 2: 'high', 3: 'medium', 4: 'low', 5: 'minimal'
 
 class ReportController:
     @staticmethod
-    def summary():
+    def summary(actor):
+        require_manager(actor)
         now = utc_now()
         by_status = Task.count_by_status()
         by_priority = Task.count_by_priority()
@@ -66,7 +68,8 @@ class ReportController:
         }
 
     @staticmethod
-    def user_report(user_id):
+    def user_report(user_id, actor):
+        require_owner_or_manager(actor, user_id)
         user = User.get(user_id)
         if not user:
             raise NotFoundError('Usuário nao encontrado')

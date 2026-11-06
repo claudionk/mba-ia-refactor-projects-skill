@@ -8,12 +8,12 @@ user_bp = Blueprint('users', __name__)
 
 @user_bp.route('/users', methods=['GET'])
 def get_users():
-    return jsonify(UserController.list_users()), 200
+    return jsonify(UserController.list_users(current_user())), 200
 
 
 @user_bp.route('/users/<int:user_id>', methods=['GET'])
 def get_user(user_id):
-    return jsonify(UserController.get_user(user_id)), 200
+    return jsonify(UserController.get_user(user_id, current_user())), 200
 
 
 @user_bp.route('/users', methods=['POST'])
@@ -33,7 +33,7 @@ def delete_user(user_id):
 
 @user_bp.route('/users/<int:user_id>/tasks', methods=['GET'])
 def get_user_tasks(user_id):
-    return jsonify(UserController.list_user_tasks(user_id)), 200
+    return jsonify(UserController.list_user_tasks(user_id, current_user())), 200
 
 
 @user_bp.route('/login', methods=['POST'])

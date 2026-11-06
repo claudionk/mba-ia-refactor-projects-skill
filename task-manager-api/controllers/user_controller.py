@@ -5,14 +5,10 @@ from models.task_model import Task
 from models.user_model import User
 from services.auth_service import create_token
 from utils.errors import AppError, ConflictError, NotFoundError, ValidationError
+from utils.permissions import require_admin, require_manager, require_owner_or_manager
 from utils.validators import is_valid_email
 
 logger = logging.getLogger(__name__)
-
-
-def _require_admin(actor, message='Acesso restrito a administradores'):
-    if not actor or not actor.is_admin():
-        raise AppError(message, 403)
 
 
 def _validate_role(role):
@@ -30,7 +26,8 @@ class UserController:
         return user
 
     @staticmethod
-    def list_users():
+    def list_users(actor):
+        require_manager(actor)
         task_counts = Task.count_by_user()
         result = []
         for user in User.list_all():
@@ -40,7 +37,8 @@ class UserController:
         return result
 
     @staticmethod
-    def get_user(user_id):
+    def get_user(user_id, actor):
+        require_owner_or_manager(actor, user_id)
         user = UserController._get_or_404(user_id)
         data = user.to_dict()
         data['tasks'] = [task.to_dict() for task in Task.list_by_user(user_id)]
@@ -65,7 +63,7 @@ class UserController:
             raise ConflictError('Email já cadastrado')
         role = _validate_role(data.get('role', constants.DEFAULT_ROLE))
         if role != constants.DEFAULT_ROLE:
-            _require_admin(actor, 'Apenas administradores podem definir role diferente de user')
+            require_admin(actor, 'Apenas administradores podem definir role diferente de user')
 
         user = User(name=name, email=email, role=role)
         user.set_password(password)
@@ -74,10 +72,24 @@ class UserController:
         return user.to_dict()
 
     @staticmethod
+    def create_admin(email, password):
+        if not email or not password:
+            raise ValidationError('ADMIN_EMAIL e ADMIN_PASSWORD são obrigatórios')
+        if not is_valid_email(email):
+            raise ValidationError('Email inválido')
+        if User.find_by_email(email):
+            raise ConflictError('Email já cadastrado')
+
+        user = User(name='Admin', email=email, role='admin')
+        user.set_password(password)
+        user.save('Erro ao criar admin')
+        return user
+
+    @staticmethod
     def update_user(user_id, data, actor):
         user = UserController._get_or_404(user_id)
         if actor.id != user_id:
-            _require_admin(actor)
+            require_admin(actor)
         if not data:
             raise ValidationError('Dados inválidos')
 
@@ -98,7 +110,7 @@ class UserController:
                 raise ValidationError('Senha muito curta')
             user.set_password(password)
         if 'role' in data:
-            _require_admin(actor, 'Apenas administradores podem alterar role')
+            require_admin(actor, 'Apenas administradores podem alterar role')
             user.role = _validate_role(data['role'])
         if 'active' in data:
             if not isinstance(data['active'], bool):
@@ -110,7 +122,7 @@ class UserController:
 
     @staticmethod
     def delete_user(user_id, actor):
-        _require_admin(actor)
+        require_admin(actor)
         user = UserController._get_or_404(user_id)
         Task.delete_by_user(user_id)
         user.remove('Erro ao deletar')
@@ -118,7 +130,8 @@ class UserController:
         return {'message': 'Usuário deletado com sucesso'}
 
     @staticmethod
-    def list_user_tasks(user_id):
+    def list_user_tasks(user_id, actor):
+        require_owner_or_manager(actor, user_id)
         UserController._get_or_404(user_id)
         return [task.to_user_task_dict() for task in Task.list_by_user(user_id)]
 

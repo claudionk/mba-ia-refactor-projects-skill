@@ -3,6 +3,7 @@ import hmac
 
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from config import constants
 from database import db
 from models.base import CrudMixin
 from utils.time_utils import utc_now
@@ -52,6 +53,9 @@ class User(CrudMixin, db.Model):
 
     def is_admin(self):
         return self.role == 'admin'
+
+    def can_manage(self):
+        return self.role in constants.MANAGER_ROLES
 
     @classmethod
     def find_by_email(cls, email):

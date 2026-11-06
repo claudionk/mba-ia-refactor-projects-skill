@@ -4,6 +4,7 @@ from config import constants
 from models.category_model import Category
 from models.task_model import Task
 from utils.errors import NotFoundError, ValidationError
+from utils.permissions import require_manager
 from utils.validators import is_valid_color
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,8 @@ class CategoryController:
         return result
 
     @staticmethod
-    def create_category(data):
+    def create_category(data, actor):
+        require_manager(actor)
         if not data:
             raise ValidationError('Dados inválidos')
         name = data.get('name')
@@ -51,7 +53,8 @@ class CategoryController:
         return category.to_dict()
 
     @staticmethod
-    def update_category(category_id, data):
+    def update_category(category_id, data, actor):
+        require_manager(actor)
         category = CategoryController._get_or_404(category_id)
         if not data:
             raise ValidationError('Dados inválidos')
@@ -69,7 +72,8 @@ class CategoryController:
         return category.to_dict()
 
     @staticmethod
-    def delete_category(category_id):
+    def delete_category(category_id, actor):
+        require_manager(actor)
         category = CategoryController._get_or_404(category_id)
         category.remove('Erro ao deletar')
         logger.info('Categoria deletada: %s', category_id)

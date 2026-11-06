@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify, request
 
 from controllers.task_controller import TaskController
+from middlewares.auth import current_user
 
 task_bp = Blueprint('tasks', __name__)
 
@@ -20,17 +21,17 @@ def create_task():
     data = request.get_json()
     if not data:
         return jsonify({'error': 'Dados inválidos'}), 400
-    return jsonify(TaskController.create_task(data)), 201
+    return jsonify(TaskController.create_task(data, current_user())), 201
 
 
 @task_bp.route('/tasks/<int:task_id>', methods=['PUT'])
 def update_task(task_id):
-    return jsonify(TaskController.update_task(task_id, request.get_json())), 200
+    return jsonify(TaskController.update_task(task_id, request.get_json(), current_user())), 200
 
 
 @task_bp.route('/tasks/<int:task_id>', methods=['DELETE'])
 def delete_task(task_id):
-    return jsonify(TaskController.delete_task(task_id)), 200
+    return jsonify(TaskController.delete_task(task_id, current_user())), 200
 
 
 @task_bp.route('/tasks/search', methods=['GET'])

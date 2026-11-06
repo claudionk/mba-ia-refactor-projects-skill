@@ -5,6 +5,7 @@ from models.category_model import Category
 from models.task_model import Task
 from models.user_model import User
 from utils.errors import NotFoundError, ValidationError
+from utils.permissions import require_manager, require_owner_or_manager
 from utils.time_utils import utc_now
 from utils.validators import validate_task_fields
 
@@ -45,8 +46,12 @@ class TaskController:
         return TaskController._get_or_404(task_id).to_dict(include_overdue=True)
 
     @staticmethod
-    def create_task(data):
+    def create_task(data, actor):
         fields = validate_task_fields(data, partial=False)
+        if not fields.get('user_id'):
+            fields['user_id'] = actor.id
+        elif fields['user_id'] != actor.id:
+            require_manager(actor, 'Apenas administradores e gerentes atribuem tasks a outros usuários')
         TaskController._check_references(fields)
         task = Task(**fields)
         task.save('Erro ao criar task')
@@ -54,11 +59,14 @@ class TaskController:
         return task.to_dict()
 
     @staticmethod
-    def update_task(task_id, data):
+    def update_task(task_id, data, actor):
         task = TaskController._get_or_404(task_id)
+        require_owner_or_manager(actor, task.user_id, 'Sem permissão para alterar esta task')
         if not data:
             raise ValidationError('Dados inválidos')
         fields = validate_task_fields(data, partial=True)
+        if 'user_id' in fields and fields['user_id'] != task.user_id:
+            require_manager(actor, 'Apenas administradores e gerentes atribuem tasks a outros usuários')
         TaskController._check_references(fields)
         for key, value in fields.items():
             setattr(task, key, value)
@@ -67,8 +75,9 @@ class TaskController:
         return task.to_dict()
 
     @staticmethod
-    def delete_task(task_id):
+    def delete_task(task_id, actor):
         task = TaskController._get_or_404(task_id)
+        require_owner_or_manager(actor, task.user_id, 'Sem permissão para alterar esta task')
         task.remove('Erro ao deletar')
         logger.info('Task deletada: %s', task_id)
         return {'message': 'Task deletada com sucesso'}

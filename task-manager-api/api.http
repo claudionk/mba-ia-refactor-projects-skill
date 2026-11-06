@@ -1,6 +1,6 @@
 ### Task Manager API — VS Code REST Client (extensão humao.rest-client)
-### Antes: python seed.py && python app.py
-### Usuários do seed: joao@email.com/1234 (admin), maria@email.com/abcd (user), pedro@email.com/pass (manager)
+### Antes: python seed.py && flask --app app create-admin && python app.py
+### O login usa ADMIN_EMAIL e ADMIN_PASSWORD do .env; os usuários do seed têm senha aleatória
 
 @baseUrl = http://localhost:5000
 @contentType = application/json
@@ -19,8 +19,8 @@ POST {{baseUrl}}/login
 Content-Type: {{contentType}}
 
 {
-  "email": "joao@email.com",
-  "password": "1234"
+  "email": "{{$dotenv ADMIN_EMAIL}}",
+  "password": "{{$dotenv ADMIN_PASSWORD}}"
 }
 
 ###
@@ -187,6 +187,6 @@ POST {{baseUrl}}/login
 Content-Type: {{contentType}}
 
 {
-  "email": "joao@email.com",
+  "email": "{{$dotenv ADMIN_EMAIL}}",
   "password": "errada"
 }
