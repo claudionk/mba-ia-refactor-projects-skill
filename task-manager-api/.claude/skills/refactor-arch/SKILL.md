@@ -1,3 +1,8 @@
+---
+name: refactor-arch
+description: Audita um backend legado e o refatora para MVC em 3 fases (análise da stack, relatório de anti-patterns e refatoração validada), com pausa obrigatória antes de alterar código. Use quando o usuário pedir auditoria de arquitetura, detecção de code smells ou refatoração para MVC.
+---
+
 # Skill: refactor-arch
 
 ## Objetivo
@@ -71,7 +76,7 @@ Consulte o arquivo de referência `01-project-analysis.md` para heurísticas det
 
 3. **Ordenar os findings** por severidade: CRITICAL → HIGH → MEDIUM → LOW.
 
-4. **Verificar autenticação de endpoints sensíveis (AP-17)** — Para cada rota administrativa, financeira ou destrutiva, confirme que existe middleware/decorator de autenticação **e** que ele nega o acesso quando a credencial não está configurada. Middleware opt-in/fail-open (`if (!token) return next()`) e `.env.example` com a credencial vazia são findings. A recomendação deve sempre ser deny-by-default (PB-12), nunca "opt-in para preservar o contrato".
+4. **Verificar autenticação de endpoints sensíveis (AP-17)** — Para cada rota administrativa, financeira ou destrutiva, confirme que existe middleware/decorator de autenticação **e** que ele nega o acesso quando a credencial não está configurada. Middleware opt-in/fail-open (`if (!token) return next()`) e `.env.example` com a credencial vazia são findings. A recomendação deve sempre ser deny-by-default (PB-12), nunca "opt-in para preservar o contrato". Verifique também a **autorização**: para cada escrita e leitura de dado pessoal, pergunte quem pode agir sobre o recurso de quem. Login válido não basta (PB-14), e identidade enviada no body não prova nada.
 
 5. **Verificar credenciais de seed (AP-02)** — Leia seeds, fixtures, migrations e fallbacks de configuração. Toda conta criada com senha literal é finding CRITICAL, inclusive quando a senha recebe hash ou quando ainda não existe rota de login. A recomendação deve seguir o PB-13.
 
@@ -136,7 +141,8 @@ Proceed with refactoring (Phase 3)? [y/n]
 4. **Seguir a ordem de refatoração**:
    a. Extrair configurações para `config/settings` (corrige hardcoded secrets)
    a1. **Eliminar credenciais de seed (PB-13)** — Nenhuma senha literal no seed, com ou sem hash. Admin nasce de comando de setup; conta exigida por integridade de dados recebe senha aleatória.
-   a2. **Proteger endpoints sensíveis com deny-by-default (PB-12), em qualquer stack** — Python e Node.js seguem o mesmo padrão: sem credencial configurada → 403; credencial errada → 401; comparação em tempo constante; `.env.example` com placeholder não vazio. É proibido o padrão opt-in que libera a rota quando a variável não está definida.
+   a2. **Proteger endpoints sensíveis com deny-by-default (PB-12), em qualquer stack** — Python e Node.js seguem o mesmo padrão: sem credencial configurada → 403; credencial errada → 401; comparação em tempo constante; `.env.example` com placeholder não vazio, que nunca vale como credencial. É proibido o padrão opt-in que libera a rota quando a variável não está definida.
+   a3. **Aplicar autorização por dono ou papel (PB-14)** — Identidade vem do token assinado, nunca do body; recurso de outro usuário responde 403.
    b. Criar/reorganizar models com queries seguras
    c. Criar controllers com lógica de negócio
    d. Criar routes/views limpos
@@ -149,6 +155,9 @@ Proceed with refactoring (Phase 3)? [y/n]
    - Para cada rota protegida, teste os 3 cenários de PB-12 (sem `ADMIN_TOKEN` → 403, token errado → 401, token correto → 200) e registre os status obtidos
    - Releia os middlewares de autenticação e confirme que nenhum caminho chama `next()`/a view quando a credencial não está configurada
    - Execute a validação do PB-13 e registre os resultados
+   - **Teste como atacante:** com o `.env` copiado do `.env.example`, tente usar cada placeholder como credencial e forjar token com o segredo de exemplo. Como usuário comum, tente ler e alterar recursos de outro usuário e criar conta privilegiada. Registre os status obtidos
+   - **Valide em clone limpo:** clone o commit em uma pasta nova, sem `.env` nem dependências instaladas, e siga os comandos do README ao pé da letra. Comando que falha é defeito do README ou do código
+   - **Grave testes automatizados no projeto** cobrindo contrato e ataques, executáveis com a biblioteca padrão da stack quando possível. Um teste só vale depois de ter falhado contra o comportamento vulnerável
    - Releia no relatório a `Recommendation` de cada CRITICAL e HIGH e aponte, para cada ação, o arquivo e a linha que a implementam, ou o teste que a comprova. Ação sem evidência mantém o finding aberto
    - Confirme que nenhum finding CRITICAL ou HIGH permanece. Só declare isso depois de todos os itens acima
 
@@ -173,6 +182,8 @@ PHASE 3: REFACTORING COMPLETE
   ✓ All endpoints respond correctly
   ✓ Sensitive endpoints deny by default (no token → 403, wrong → 401, valid → 200)
   ✓ No seed credentials (PB-13)
+  ✓ Placeholders and forged tokens rejected; owner/role authorization enforced (PB-12, PB-14)
+  ✓ Clean clone: README commands work and automated tests pass
   ✓ Every CRITICAL/HIGH recommendation applied in full
   ✓ Zero CRITICAL/HIGH anti-patterns remaining
 ================================

@@ -580,7 +580,8 @@ logger.info(`Servidor iniciado na porta ${config.port}`);
 2. **Credencial errada ou ausente na requisição → 401.**
 3. **Comparação em tempo constante** (`hmac.compare_digest` / `crypto.timingSafeEqual`).
 4. **`.env.example` nunca deixa a credencial vazia** — usa um placeholder explícito (`troque-por-um-token-admin-forte`).
-5. **Proibido o padrão opt-in** ("só exige token se a variável estiver definida") com a justificativa de preservar o contrato. Fechar um endpoint sensível é uma mudança de contrato necessária: documente-a, não a evite.
+5. **Placeholder nunca vale como credencial.** A configuração trata valores com o prefixo `troque-por-` como não configurados: token de rota → 403; segredo obrigatório, como `SECRET_KEY` → a aplicação não inicia e a mensagem ensina a gerar um valor.
+6. **Proibido o padrão opt-in** ("só exige token se a variável estiver definida") com a justificativa de preservar o contrato. Fechar um endpoint sensível é uma mudança de contrato necessária: documente-a, não a evite.
 
 ### Python — decorator (padrão usado em `code-smells-project/middlewares/auth.py`)
 
@@ -677,6 +678,7 @@ Para cada rota protegida, executar e registrar as 3 respostas:
 | Servidor sem `ADMIN_TOKEN`                | 403      |
 | `ADMIN_TOKEN` definido, header ausente/errado | 401  |
 | `ADMIN_TOKEN` definido, header correto    | 200      |
+| `ADMIN_TOKEN` igual ao placeholder do `.env.example`, header igual a ele | 403 |
 
 ---
 
@@ -756,4 +758,70 @@ Se o projeto precisa de admin, o equivalente é um script (`npm run create-admin
 | Banco novo: contas `admin` criadas pelo boot                    | 0                       |
 | Comando de setup sem a variável (se houver comando)             | Falha, nenhuma conta    |
 | Comando de setup com a variável, seguido de login               | Conta criada, 200       |
+
+---
+
+## PB-14 · Autenticação sem Autorização → Identidade do Token e Regra por Dono ou Papel
+
+**Anti-pattern:** AP-17 (sinais "identidade vinda do cliente" e "autenticação sem autorização")  
+**Aplica-se a:** Qualquer stack com contas de usuário
+
+### Regras (valem para qualquer linguagem)
+
+1. **A identidade vem de um token assinado**, emitido no login e relido do banco a cada requisição. Usuário removido ou inativo → 401.
+2. **`usuario_id` no body ou na URL é só o alvo da operação**, nunca a prova de quem está pedindo. Alvo diferente do token → 403, salvo papel privilegiado.
+3. **Escreva a matriz de permissões antes do código:** para cada rota, quem pode (anônimo, dono, papel). Publique a matriz no README.
+4. **A checagem fica no controller**, próxima da regra de negócio, para que nenhuma rota a esqueça.
+5. **Cadastro público cria apenas o papel mais baixo.** Papel privilegiado enviado pelo cliente exige um chamador privilegiado.
+
+### Python — token assinado e checagem por dono
+
+**Antes:**
+```python
+@pedidos_bp.post("/pedidos")
+def criar_pedido():
+    return pedido_controller.criar(request.get_json())   # usuario_id do body, sem conferir
+
+@task_bp.route('/tasks/<int:task_id>', methods=['DELETE'])
+def delete_task(task_id):
+    return TaskController.delete_task(task_id)           # qualquer usuário logado apaga qualquer task
+```
+
+**Depois:**
+```python
+@pedidos_bp.post("/pedidos")
+@requer_usuario
+def criar_pedido():
+    return pedido_controller.criar(request.get_json(), usuario_atual())
+
+def criar(dados, ator):
+    if dados["usuario_id"] != ator["id"] and ator["tipo"] != "admin":
+        raise ForbiddenError("Pedido so pode ser criado para o proprio usuario")
+
+def delete_task(task_id, actor):
+    task = TaskController._get_or_404(task_id)
+    if task.user_id != actor.id and not actor.can_manage():
+        raise AppError('Sem permissão para alterar esta task', 403)
+```
+
+### Node.js — mesma regra em Express
+
+```js
+function canAccess(actor, ownerId) {
+    return actor.id === ownerId || actor.role === 'admin';
+}
+
+if (!canAccess(req.user, Number(req.params.userId))) throw new AppError(403, 'Forbidden');
+```
+
+### Validação obrigatória (Fase 3)
+
+| Cenário                                                   | Esperado |
+|-----------------------------------------------------------|----------|
+| Sem token, em rota que exige login                        | 401      |
+| Token forjado com o segredo do `.env.example`             | Aplicação recusa esse segredo e não inicia |
+| Usuário comum agindo sobre recurso próprio                | 2xx      |
+| Usuário comum agindo sobre recurso de outro               | 403      |
+| Papel privilegiado agindo sobre recurso de outro          | 2xx      |
+| Cadastro público pedindo papel privilegiado               | 403      |
 

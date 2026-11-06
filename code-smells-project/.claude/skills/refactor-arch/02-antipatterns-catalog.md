@@ -47,6 +47,7 @@ cursor.execute("SELECT * FROM usuarios WHERE email = '" + email + "'")
   - `user.set_password('1234')` em `seed.py`
   - `generate_password_hash("admin123")`: o hash protege o banco, mas a senha continua pública no repositório
 - Fallback literal para segredo ausente: `process.env.SEED_USER_PASSWORD || 'change-me-seed'`, `os.environ.get("SECRET_KEY", "dev-key")`
+- **Placeholder aceito como segredo:** quem copia o `.env.example` sobe com um valor público que funciona. Ex.: `SECRET_KEY=change-me` assinando tokens válidos; proteção que só compara com a chave de desenvolvimento
 
 **Verificar em:** `app.py`, `app.js`, `config.py`, `settings.py`, `utils.js`, `database.py`, `seed.py`, `init.js`, migrations, fixtures, qualquer arquivo de inicialização.
 
@@ -83,10 +84,13 @@ cursor.execute("SELECT * FROM usuarios WHERE email = '" + email + "'")
 - `.env.example` com a variável de credencial vazia (`ADMIN_TOKEN=`), o que faz o projeto subir com a proteção desligada
 - Comparação de token com `===` / `==` em vez de comparação em tempo constante
 - Autorização baseada em campo enviado pelo cliente (`role: 'admin'` no body)
+- **Identidade vinda do cliente:** `usuario_id` no body ou na URL usado sem conferir com o token (`POST /pedidos` em nome de outro; `GET /pedidos/usuario/1` anônimo)
+- **Autenticação sem autorização:** qualquer usuário logado altera ou apaga recurso de outro, ou lê dados pessoais e relatórios. Com cadastro público, isso equivale a endpoint aberto
+- Token previsível ou que nenhuma rota valida (`'fake-jwt-token-' + id`)
 
-**Verificar em:** `middlewares/`, `routes/`, decorators de rota, `.env.example`, `config/settings`.
+**Verificar em:** `middlewares/`, `routes/`, `controllers/`, decorators de rota, `.env.example`, `config/settings`.
 
-**Regra:** um middleware que só protege "quando configurado" **não corrige** este anti-pattern; ele continua aberto na configuração padrão e deve ser reportado como finding.
+**Regra:** um middleware que só protege "quando configurado" **não corrige** este anti-pattern; ele continua aberto na configuração padrão e deve ser reportado como finding. Exigir login sem conferir dono ou papel também não corrige (PB-14).
 
 ---
 
