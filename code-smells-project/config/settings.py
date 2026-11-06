@@ -7,10 +7,22 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 
+PREFIXO_PLACEHOLDER = "troque-por-"
+
+
+def _segredo(nome):
+    """Placeholder do .env.example nunca vale como credencial."""
+    valor = os.environ.get(nome, "")
+    return "" if valor.startswith(PREFIXO_PLACEHOLDER) else valor
+
+
 def _obrigatoria(nome):
-    valor = os.environ.get(nome)
+    valor = _segredo(nome)
     if not valor:
-        raise RuntimeError(f"Variavel de ambiente obrigatoria nao configurada: {nome}")
+        raise RuntimeError(
+            f"Defina {nome} no ambiente ou no .env. "
+            "Gere um valor com: python -c \"import secrets; print(secrets.token_hex(32))\""
+        )
     return valor
 
 
@@ -21,8 +33,9 @@ class Settings:
     HOST = os.environ.get("HOST", "127.0.0.1")
     PORT = int(os.environ.get("PORT", "5000"))
     DB_PATH = os.environ.get("DB_PATH", "loja.db")
-    # Exigido no header X-Admin-Token. Vazio = operações administrativas desabilitadas.
-    ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
+    TOKEN_TTL_SEGUNDOS = int(os.environ.get("TOKEN_TTL_SEGUNDOS", str(8 * 3600)))
+    # Exigido no header X-Admin-Token. Vazio ou placeholder = operações administrativas desabilitadas.
+    ADMIN_TOKEN = _segredo("ADMIN_TOKEN")
     # Lidas só pelo comando criar-admin. Sem valor padrão: o comando falha se estiverem vazias.
     ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "")
     ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")

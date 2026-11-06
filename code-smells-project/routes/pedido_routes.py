@@ -1,14 +1,15 @@
 from flask import Blueprint, jsonify, request
 
 from controllers import pedido_controller
-from middlewares.auth import requer_admin
+from middlewares.auth import requer_admin, requer_usuario, usuario_atual
 
 pedidos_bp = Blueprint("pedidos", __name__)
 
 
 @pedidos_bp.post("/pedidos")
+@requer_usuario
 def criar_pedido():
-    resultado = pedido_controller.criar(request.get_json(silent=True))
+    resultado = pedido_controller.criar(request.get_json(silent=True), usuario_atual())
     return jsonify({
         "dados": resultado,
         "sucesso": True,
@@ -23,8 +24,10 @@ def listar_todos_pedidos():
 
 
 @pedidos_bp.get("/pedidos/usuario/<int:usuario_id>")
+@requer_usuario
 def listar_pedidos_usuario(usuario_id):
-    return jsonify({"dados": pedido_controller.listar_por_usuario(usuario_id), "sucesso": True}), 200
+    pedidos = pedido_controller.listar_por_usuario(usuario_id, usuario_atual())
+    return jsonify({"dados": pedidos, "sucesso": True}), 200
 
 
 @pedidos_bp.put("/pedidos/<int:pedido_id>/status")

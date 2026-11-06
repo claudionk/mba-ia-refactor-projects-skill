@@ -220,3 +220,21 @@ CRITICAL: 6 | HIGH: 5 | MEDIUM: 5 | LOW: 4
 
 Phase 2 complete. Proceed with refactoring (Phase 3)? [y/n]
 >
+
+================================
+ADENDO PÓS-REVISÃO (2026-11-06)
+================================
+Os findings acima descrevem o código original. A revisão mostrou que duas recomendações tinham sido cumpridas só em parte. Sem reexecutar a skill neste projeto, elas foram concluídas:
+
+[CRITICAL] Secrets e credenciais hardcoded
+  - SECRET_KEY obrigatória; recusa também o placeholder → config/settings.py:13-26, 31
+  - Campos internos fora do /health → teste test_health_nao_expoe_segredo
+  - Admin por comando de setup, não pelo seed → app.py (criar-admin); database.py sem usuários; teste test_criar_admin_falha_sem_variaveis_e_cria_com_elas
+
+[HIGH] Ausência de autenticação e autorização
+  - Rotas administrativas com X-Admin-Token deny-by-default → middlewares/auth.py:14-25
+  - Placeholder de ADMIN_TOKEN não vale como credencial → config/settings.py:13-16, 38; teste test_placeholder_de_admin_token_nao_vale_como_credencial
+  - Pedidos exigem login e conferem o dono → routes/pedido_routes.py:10, 27; controllers/pedido_controller.py:14-16, 28, 63; testes em PedidosTest
+  - `POST /usuarios` e `POST /login` seguem públicos: formam o fluxo de cadastro e criam só contas `cliente`
+
+Mudança de contrato: `POST /login` agora também devolve `token`; `POST /pedidos` e `GET /pedidos/usuario/<id>` exigem `Authorization: Bearer <token>`.

@@ -1,6 +1,6 @@
 import logging
 
-from controllers.erros import ValidationError
+from controllers.erros import ForbiddenError, ValidationError
 from controllers.validacao import eh_inteiro, exige_objeto
 from database import get_db, transacao
 from models.pedido_model import PedidoModel
@@ -11,7 +11,12 @@ logger = logging.getLogger(__name__)
 STATUS_PEDIDO = ("pendente", "aprovado", "enviado", "entregue", "cancelado")
 
 
-def criar(dados):
+def _exige_dono_ou_admin(ator, usuario_id):
+    if ator["id"] != usuario_id and ator["tipo"] != "admin":
+        raise ForbiddenError("Sem permissao para acessar pedidos de outro usuario")
+
+
+def criar(dados, ator):
     dados = exige_objeto(dados)
     usuario_id = dados.get("usuario_id")
     itens = dados.get("itens", [])
@@ -20,6 +25,7 @@ def criar(dados):
         raise ValidationError("Usuario ID é obrigatório")
     if not eh_inteiro(usuario_id):
         raise ValidationError("Usuario ID deve ser inteiro")
+    _exige_dono_ou_admin(ator, usuario_id)
     if not isinstance(itens, list) or not itens:
         raise ValidationError("Pedido deve ter pelo menos 1 item")
     itens_validados = [_validar_item(item) for item in itens]
@@ -53,7 +59,8 @@ def listar_todos():
     return PedidoModel.get_all(get_db())
 
 
-def listar_por_usuario(usuario_id):
+def listar_por_usuario(usuario_id, ator):
+    _exige_dono_ou_admin(ator, usuario_id)
     return PedidoModel.get_by_usuario(get_db(), usuario_id)
 
 

@@ -6,7 +6,12 @@ API de E-commerce em Python/Flask usada como entrada do desafio `refactor-arch`.
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env   # troque os valores
+cp .env.example .env
+```
+
+No `.env`, defina `SECRET_KEY` e `ADMIN_TOKEN` (gere com `python -c "import secrets; print(secrets.token_hex(32))"`). Depois:
+
+```bash
 python app.py
 ```
 
@@ -28,13 +33,19 @@ Toda configuração vem de variáveis de ambiente, lidas do shell ou do arquivo 
 
 | Variável      | Padrão      | Função                                                                 |
 |---------------|-------------|------------------------------------------------------------------------|
-| `SECRET_KEY`  | obrigatória | Chave da aplicação. Sem valor, a aplicação não inicia.                 |
-| `ADMIN_TOKEN` | vazio       | Token das rotas administrativas. Vazio = rotas admin desabilitadas.    |
+| `SECRET_KEY`  | obrigatória | Assina os tokens de login. Sem valor, ou com o placeholder, a aplicação não inicia. |
+| `ADMIN_TOKEN` | vazio       | Token das rotas administrativas. Vazio ou placeholder = rotas admin desabilitadas. |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | vazio | Dados da conta criada por `criar-admin`. Vazio = o comando falha. |
 | `DEBUG`       | `false`     | Modo debug do Flask. Não use em produção.                              |
 | `HOST`        | `127.0.0.1` | Interface de escuta.                                                   |
 | `PORT`        | `5000`      | Porta HTTP.                                                            |
 | `DB_PATH`     | `loja.db`   | Caminho do arquivo SQLite.                                             |
+
+## Testes
+
+```bash
+python -m unittest discover -s tests -t .
+```
 
 ## Autenticação administrativa
 
@@ -46,17 +57,21 @@ Rotas administrativas exigem o header `X-Admin-Token` com o valor de `ADMIN_TOKE
 - `GET /relatorios/vendas`
 - `POST /admin/reset-db`
 
-Sem token: `401`. Token inválido: `401`. `ADMIN_TOKEN` não configurado: `403`.
+Sem token: `401`. Token inválido: `401`. `ADMIN_TOKEN` não configurado, ou igual ao placeholder: `403`.
 
 ### Rotas públicas
 
 As demais rotas não exigem token. Elas formam o fluxo de um cliente da loja e precisam ficar acessíveis sem credencial administrativa:
 
 - Catálogo: `GET /produtos`, `GET /produtos/busca`, `GET /produtos/<id>`
-- Cadastro, login e pedidos: `POST /usuarios`, `POST /login`, `POST /pedidos`
-- Pedidos de um usuário: `GET /pedidos/usuario/<id>`
+- Cadastro e login: `POST /usuarios`, `POST /login`
 - Monitoramento: `GET /`, `GET /health`
 
-> **Atenção:** `GET /pedidos/usuario/<id>` não valida o dono do pedido. Qualquer pessoa consegue ler os pedidos de outro usuário. Pendência conhecida, fora do escopo atual.
+### Pedidos de cliente
+
+`POST /login` devolve um `token` assinado, com validade de `TOKEN_TTL_SEGUNDOS` (padrão: 8h). `POST /pedidos` e `GET /pedidos/usuario/<id>` exigem `Authorization: Bearer <token>`:
+
+- Sem token ou com token inválido: `401`.
+- Agir em nome de outro usuário: `403`, exceto para conta do tipo `admin`.
 
 Senhas são armazenadas com hash (`werkzeug.security`). Contas criadas antes desta versão, com senha em texto puro, são migradas no primeiro login bem-sucedido.

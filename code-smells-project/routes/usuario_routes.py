@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request
 
 from controllers import usuario_controller
 from middlewares.auth import requer_admin
+from services.token_service import criar_token
 
 usuarios_bp = Blueprint("usuarios", __name__)
 
@@ -27,4 +28,9 @@ def criar_usuario():
 @usuarios_bp.post("/login")
 def login():
     usuario = usuario_controller.login(request.get_json(silent=True))
-    return jsonify({"dados": usuario, "sucesso": True, "mensagem": "Login OK"}), 200
+    return jsonify({
+        "dados": usuario,
+        "token": criar_token(usuario["id"]),
+        "sucesso": True,
+        "mensagem": "Login OK",
+    }), 200
